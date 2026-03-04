@@ -47,28 +47,32 @@ Output JSON with:
 }
 
 RULES:
-1. base_weight (0.2-0.4): Weight per 80-template prompt. Low but provides stability.
+1. base_weight (0.2-0.4): GROUP weight for the entire 80-template ensemble.
+   This is NOT per-prompt — it's the fraction of signal from all base templates combined.
+   Example: base_weight=0.3 means 30% of the final embedding comes from base templates.
    The 80 templates are added automatically — do NOT include base_templates.
 
-2. description_prompt: A system prompt sent to the LLM to generate 7-10 SHORT visual
+2. description_prompt: A system prompt sent to the LLM to generate 10-15 SHORT visual
    descriptions per class. This is the most important part.
    Emphasize: "Generate short descriptions under 15 words each. Format: 'a {class}, {visual features}'.
    Focus on shape, dominant color, size, texture, and typical setting visible at low resolution."
 
-3. description_weight (0.6-0.8): Weight per description prompt. Higher than base_weight.
+3. description_weight (0.6-0.8): GROUP weight for all descriptions combined.
+   Example: description_weight=0.7 means 70% of the final embedding comes from descriptions.
+   base_weight + description_weight should sum to 1.0 (they are group fractions).
 
 4. class_specific_prompts: Write DISCRIMINATIVE prompts ONLY for the hardest confusion
    pairs (5-15 classes). These should highlight what makes each class DIFFERENT from
    its confusable counterpart.
    Example: "whale": {"prompts": ["a whale, massive dark body with water spout, much larger than a dolphin",
                                     "a whale, huge grey marine mammal with wide flat tail"]}
-   These get description_weight * 1.5.
+   These get 30% of the description budget (taken from the description group weight).
 
 CRITICAL:
 - NEVER use negation ("not a X") — CLIP ignores negation.
 - NEVER include base_templates — the 80-template ensemble is added automatically.
 - Keep ALL descriptions SHORT (under 15 words).
-- base_weight + description_weight need NOT sum to 1.0 (they are per-prompt weights, not totals).
+- base_weight + description_weight SHOULD sum to 1.0 (they are group fractions).
 - Focus class_specific_prompts on classes the Analyst flagged as hardest.
 """
 

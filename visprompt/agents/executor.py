@@ -149,24 +149,31 @@ class PromptExecutor(BaseAgent):
                 if c in self._description_cache
             }
 
-        # ── Assemble per-class prompts ───────────────────────────────────
+        # ── Assemble per-class prompts with GROUP-LEVEL normalization ─────
+        # base_weight and description_weight are GROUP fractions (not per-prompt).
+        # Each prompt within a group gets group_weight / group_size.
+        # This ensures descriptions actually contribute their intended fraction
+        # of the signal, regardless of how many base templates exist.
+        logged_weights = False
         for cls_name in task_spec.class_names:
             cls_prompts = []
-            cls_weights = []
+
+            # Collect prompts by group
+            base_prompts = []
+            desc_prompts = []
+            csp_prompts = []
 
             # 1. Full 80-template ensemble as stable base
             for template in IMAGENET_TEMPLATES:
                 filled = template.format(cls_name)
-                cls_prompts.append(filled)
-                cls_weights.append(base_weight)
+                base_prompts.append(filled)
 
-            # 2. LLM-generated CuPL-style descriptions (high weight each)
+            # 2. LLM-generated CuPL-style descriptions
             if cls_name in class_descriptions:
                 for desc in class_descriptions[cls_name]:
-                    cls_prompts.append(desc)
-                    cls_weights.append(description_weight)
+                    desc_prompts.append(desc)
 
-            # 3. Class-specific overrides for hardest classes (highest weight)
+            # 3. Class-specific overrides for hardest classes
             if cls_name in class_specific:
                 for p in class_specific[cls_name].get("prompts", []):
                     filled_p = p
@@ -174,8 +181,53 @@ class PromptExecutor(BaseAgent):
                         filled_p = filled_p.replace("{class}", cls_name)
                     elif "{}" in filled_p:
                         filled_p = filled_p.replace("{}", cls_name, 1)
-                    cls_prompts.append(filled_p)
-                    cls_weights.append(description_weight * 1.5)
+                    csp_prompts.append(filled_p)
+
+            # ── Compute group-normalized per-prompt weights ──────────────
+            n_base = len(base_prompts)
+            n_desc = len(desc_prompts)
+            n_csp = len(csp_prompts)
+
+            if n_desc > 0 or n_csp > 0:
+                # Distribute description_weight between desc and csp groups
+                # CSP gets a boost: 30% of description budget, desc gets 70%
+                if n_csp > 0:
+                    csp_group_frac = description_weight * 0.3
+                    desc_group_frac = description_weight * 0.7
+                else:
+                    csp_group_frac = 0.0
+                    desc_group_frac = description_weight
+
+                per_base = base_weight / n_base if n_base > 0 else 0
+                per_desc = desc_group_frac / n_desc if n_desc > 0 else 0
+                per_csp = csp_group_frac / n_csp if n_csp > 0 else 0
+            else:
+                # No descriptions at all — equal weight to base
+                per_base = 1.0 / n_base if n_base > 0 else 1.0
+                per_desc = 0
+                per_csp = 0
+
+            # Log effective fractions once for debugging
+            if not logged_weights and n_desc > 0:
+                total_w = n_base * per_base + n_desc * per_desc + n_csp * per_csp
+                base_pct = (n_base * per_base / total_w * 100) if total_w > 0 else 0
+                desc_pct = (n_desc * per_desc / total_w * 100) if total_w > 0 else 0
+                csp_pct = (n_csp * per_csp / total_w * 100) if total_w > 0 else 0
+                logger.info(
+                    f"[{self.name}] Group-normalized weights: "
+                    f"base={base_pct:.0f}% ({n_base}×{per_base:.5f}), "
+                    f"desc={desc_pct:.0f}% ({n_desc}×{per_desc:.5f})"
+                    + (f", csp={csp_pct:.0f}% ({n_csp}×{per_csp:.5f})" if n_csp > 0 else "")
+                )
+                logged_weights = True
+
+            # Assemble final prompt + weight lists
+            cls_prompts = base_prompts + desc_prompts + csp_prompts
+            cls_weights = (
+                [per_base] * n_base +
+                [per_desc] * n_desc +
+                [per_csp] * n_csp
+            )
 
             if not cls_prompts:
                 cls_prompts = [f"a photo of a {cls_name}"]
@@ -206,7 +258,7 @@ class PromptExecutor(BaseAgent):
         """
         all_descriptions = {}
         target_classes = class_names or task_spec.class_names
-        batch_size = 15  # Keep small to avoid JSON truncation at 4096 max_tokens
+        batch_size = 10  # Keep small to avoid JSON truncation at 4096 max_tokens
 
         for i in range(0, len(target_classes), batch_size):
             batch = target_classes[i:i + batch_size]
@@ -226,7 +278,7 @@ class PromptExecutor(BaseAgent):
     ) -> dict[str, list[str]]:
         """Generate descriptions for a single batch with retry on failure."""
         user_prompt = (
-            f"Generate 7-10 short visual descriptions for each class below.\n"
+            f"Generate 10-15 short visual descriptions for each class below.\n"
             f"Format each as: \"a {{class_name}}, {{short visual description}}\"\n"
             f"Keep descriptions under 15 words. Focus on shape, color, size, texture, habitat.\n\n"
             f"Examples:\n"
