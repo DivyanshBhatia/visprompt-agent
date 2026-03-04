@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--annotation-dir", type=str)
     parser.add_argument("--annotation-file", type=str)
     parser.add_argument("--val-size", type=int, default=5000)
-    parser.add_argument("--clip-model", type=str, default="ViT-B/32")
+    parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--sam-checkpoint", type=str)
     parser.add_argument("--sam-model-type", type=str, default="vit_b")
     parser.add_argument("--gdino-config", type=str)
@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--llm", type=str, default="gpt-4o")
     parser.add_argument("--llm-provider", type=str, default="openai")
+    parser.add_argument("--skip-llm", action="store_true", help="Skip CuPL (no LLM cost)")
     parser.add_argument("--output-dir", type=str, default="experiments/baselines")
     parser.add_argument("--verbose", "-v", action="store_true")
 
@@ -47,7 +48,16 @@ def main():
     task_runner = build_task_runner(args, task_spec)
 
     runner = BaselineRunner(task_runner=task_runner, task_spec=task_spec)
-    results = runner.run_all(llm_model=args.llm, llm_provider=args.llm_provider)
+
+    if args.skip_llm:
+        # Only run free baselines (no LLM cost)
+        results = {}
+        results["single_template"] = runner.run_single_template()
+        results["80_template_ensemble"] = runner.run_80_template_ensemble()
+        results["waffle_clip"] = runner.run_waffle_clip()
+        runner._print_comparison(results)
+    else:
+        results = runner.run_all(llm_model=args.llm, llm_provider=args.llm_provider)
 
     # Save results
     output_path = Path(args.output_dir) / f"{args.dataset}_baselines.json"
