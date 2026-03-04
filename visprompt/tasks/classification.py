@@ -228,24 +228,25 @@ class CLIPClassificationRunner(BaseTaskRunner):
         n_samples = image_features_orig.shape[0]
 
         # ── 3. Logit-level ensembling over all views ─────────────────────
-        logit_scale = self._clip_model.logit_scale.exp()
+        with torch.no_grad():
+            logit_scale = self._clip_model.logit_scale.exp()
 
-        logits_orig = torch.zeros(n_samples, n_classes, device=self.device)
-        logits_flip = torch.zeros(n_samples, n_classes, device=self.device)
+            logits_orig = torch.zeros(n_samples, n_classes, device=self.device)
+            logits_flip = torch.zeros(n_samples, n_classes, device=self.device)
 
-        for cls_idx, (text_feats, weights) in enumerate(class_text_data):
-            sims_orig = logit_scale * (image_features_orig @ text_feats.T)
-            logits_orig[:, cls_idx] = (sims_orig * weights.unsqueeze(0)).sum(dim=-1)
+            for cls_idx, (text_feats, weights) in enumerate(class_text_data):
+                sims_orig = logit_scale * (image_features_orig @ text_feats.T)
+                logits_orig[:, cls_idx] = (sims_orig * weights.unsqueeze(0)).sum(dim=-1)
 
-            sims_flip = logit_scale * (image_features_flip @ text_feats.T)
-            logits_flip[:, cls_idx] = (sims_flip * weights.unsqueeze(0)).sum(dim=-1)
+                sims_flip = logit_scale * (image_features_flip @ text_feats.T)
+                logits_flip[:, cls_idx] = (sims_flip * weights.unsqueeze(0)).sum(dim=-1)
 
-        # Average TTA logits
-        logits = (logits_orig + logits_flip) / 2.0
-        probs = logits.softmax(dim=-1)
+            # Average TTA logits
+            logits = (logits_orig + logits_flip) / 2.0
+            probs = logits.softmax(dim=-1)
 
-        all_preds = probs.argmax(dim=-1).cpu().numpy()
-        all_scores = probs.max(dim=-1).values.cpu().numpy()
+        all_preds = probs.argmax(dim=-1).detach().cpu().numpy()
+        all_scores = probs.max(dim=-1).values.detach().cpu().numpy()
         targets = self._labels[:n_samples]
 
         # ── 4. Compute metrics ────────────────────────────────────────────
