@@ -19,16 +19,20 @@ PLANNER_SYSTEM_CLASSIFICATION = """You are the Prompt Planner for zero-shot CLAS
 
 Given the Dataset Analyst's report, design a prompt strategy that BEATS standard template ensembles.
 
-KEY INSIGHT: CLIP benefits from class-specific visual descriptions far more than generic template
-variations. "a photo of a {class}" and "a blurry photo of a {class}" produce nearly identical
-embeddings. What works is describing WHAT the class looks like:
-  - "a camel, a large tan animal with one or two humps on its back in a desert"
-  - "a ray, a flat diamond-shaped fish with a long thin tail swimming in the ocean"
+ARCHITECTURE: Your strategy uses a HYBRID approach:
+- 80-template ensemble (Radford et al.) is AUTOMATICALLY included as a stable base
+- You design the LLM description generation and class-specific overrides that ADD to it
+
+KEY INSIGHT: CLIP was trained on short alt-text captions. Descriptions must be SHORT (under 15 words)
+and use natural language, NOT full sentences. Good vs bad:
+  GOOD: "a camel, a large tan animal with humps in a desert"
+  GOOD: "a ray, a flat diamond-shaped fish with wing-like fins"
+  BAD: "The camel is a large animal that is typically tan in color and has one or two humps on its back."
+  BAD: "A photograph showing a ray which is a type of flat fish."
 
 Output JSON with:
 {
   "strategy_name": str,
-  "base_templates": [str],
   "description_prompt": str,
   "class_specific_prompts": {
     "class_name": {
@@ -43,29 +47,28 @@ Output JSON with:
 }
 
 RULES:
-1. base_templates: 3-5 simple templates using {class} placeholder.
-   Example: ["a photo of a {class}.", "a photo of the {class}."]
-   These get base_weight (should be LOW, e.g. 0.2-0.3).
+1. base_weight (0.2-0.4): Weight per 80-template prompt. Low but provides stability.
+   The 80 templates are added automatically — do NOT include base_templates.
 
-2. description_prompt: A system prompt that will be sent to the LLM to generate
-   visual descriptions for EVERY class. This is the most important part.
-   The descriptions should emphasize: shape, color, texture, size, habitat/context,
-   and distinctive features visible even at low resolution.
-   Be specific: "Describe what each class looks like visually, focusing on
-   features distinguishable at 32x32 resolution: overall shape, dominant colors,
-   typical background/setting."
+2. description_prompt: A system prompt sent to the LLM to generate 7-10 SHORT visual
+   descriptions per class. This is the most important part.
+   Emphasize: "Generate short descriptions under 15 words each. Format: 'a {class}, {visual features}'.
+   Focus on shape, dominant color, size, texture, and typical setting visible at low resolution."
 
-3. class_specific_prompts: Write prompts ONLY for the Analyst's hardest confusion
-   pairs (5-15 classes max). These should be discriminative descriptions.
-   Write COMPLETE prompts with class names filled in.
-   Example: "ray": {"prompts": ["a manta ray, flat diamond-shaped body gliding through blue water",
-                                 "a stingray, a flat grey fish with wing-like fins near the ocean floor"]}
-   These get description_weight (should be HIGH, e.g. 0.7-0.8).
+3. description_weight (0.6-0.8): Weight per description prompt. Higher than base_weight.
+
+4. class_specific_prompts: Write DISCRIMINATIVE prompts ONLY for the hardest confusion
+   pairs (5-15 classes). These should highlight what makes each class DIFFERENT from
+   its confusable counterpart.
+   Example: "whale": {"prompts": ["a whale, massive dark body with water spout, much larger than a dolphin",
+                                    "a whale, huge grey marine mammal with wide flat tail"]}
+   These get description_weight * 1.5.
 
 CRITICAL:
 - NEVER use negation ("not a X") — CLIP ignores negation.
-- NEVER use unreachable placeholders like {habitat}. Only {class} is supported.
-- base_weight + description_weight should roughly sum to 1.0.
+- NEVER include base_templates — the 80-template ensemble is added automatically.
+- Keep ALL descriptions SHORT (under 15 words).
+- base_weight + description_weight need NOT sum to 1.0 (they are per-prompt weights, not totals).
 - Focus class_specific_prompts on classes the Analyst flagged as hardest.
 """
 
@@ -153,11 +156,14 @@ Strategist's refinement recommendations:
 {strategist_recs}
 
 Update your strategy to address the diagnosed issues.
-- Keep base_templates that worked.
-- Refine description_prompt to generate better descriptions for failing classes.
+- The 80-template ensemble is included automatically as base — focus on descriptions.
+- Refine description_prompt to generate better SHORT descriptions for failing classes.
 - Add/update class_specific_prompts for classes the Strategist identified.
 - Adjust base_weight and description_weight if the balance was wrong.
 - NEVER use negation ("not a X") in any prompt.
+- Keep ALL descriptions under 15 words.
+- NOTE: Descriptions from previous iterations are CACHED. Only class_specific_prompts
+  and weight adjustments take effect in refinement iterations.
 """
 
 

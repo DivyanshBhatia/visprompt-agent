@@ -39,6 +39,7 @@ class PromptExecutor(BaseAgent):
         """
         super().__init__(llm)
         self.task_runner = task_runner
+        self._description_cache: dict[str, list[str]] = {}
 
     def run(
         self,
@@ -116,58 +117,56 @@ class PromptExecutor(BaseAgent):
     ) -> dict[str, Any]:
         """Build per-class prompt lists from the strategy.
 
-        New flow:
-        1. Base templates (generic, low weight)
-        2. LLM-generated per-class visual descriptions (high weight)
-        3. Class-specific overrides for hardest classes (high weight)
+        Hybrid approach for maximum accuracy:
+        1. 80-template ensemble as stable base (low per-prompt weight)
+        2. LLM-generated CuPL-style visual descriptions (high per-prompt weight)
+        3. Class-specific discriminative prompts for hardest classes (highest weight)
         """
+        from visprompt.baselines import IMAGENET_TEMPLATES
+
         prompts_per_class = {}
 
         # ── Extract strategy fields ──────────────────────────────────────
-        base_templates = strategy.get("base_templates", [])
-        # Fallback: support old "levels" format
-        if not base_templates and "levels" in strategy:
-            for level in strategy["levels"]:
-                base_templates.extend(level.get("templates", []))
-        if not base_templates:
-            base_templates = ["a photo of a {class}."]
-
         description_prompt = strategy.get("description_prompt", "")
         class_specific = strategy.get("class_specific_prompts", {})
-        base_weight = strategy.get("base_weight", 0.25)
-        description_weight = strategy.get("description_weight", 0.75)
+        base_weight = strategy.get("base_weight", 0.3)
+        description_weight = strategy.get("description_weight", 0.7)
 
-        # ── Generate per-class descriptions via LLM ──────────────────────
+        # ── Generate per-class descriptions via LLM (cached) ─────────────
         class_descriptions = {}
         if description_prompt:
-            class_descriptions = self._generate_class_descriptions(
-                task_spec, description_prompt
-            )
+            # Only generate for classes not already cached
+            uncached = [c for c in task_spec.class_names
+                        if c not in self._description_cache]
+            if uncached:
+                new_descs = self._generate_class_descriptions(
+                    task_spec, description_prompt, class_names=uncached
+                )
+                self._description_cache.update(new_descs)
+            class_descriptions = {
+                c: self._description_cache[c]
+                for c in task_spec.class_names
+                if c in self._description_cache
+            }
 
         # ── Assemble per-class prompts ───────────────────────────────────
         for cls_name in task_spec.class_names:
             cls_prompts = []
             cls_weights = []
 
-            # 1. Base templates
-            for template in base_templates:
-                filled = template
-                if "{class}" in filled:
-                    filled = filled.replace("{class}", cls_name)
-                elif "{}" in filled:
-                    filled = filled.replace("{}", cls_name, 1)
-                else:
-                    filled = f"a photo of a {cls_name}"
+            # 1. Full 80-template ensemble as stable base
+            for template in IMAGENET_TEMPLATES:
+                filled = template.format(cls_name)
                 cls_prompts.append(filled)
                 cls_weights.append(base_weight)
 
-            # 2. LLM-generated descriptions
+            # 2. LLM-generated CuPL-style descriptions (high weight each)
             if cls_name in class_descriptions:
                 for desc in class_descriptions[cls_name]:
                     cls_prompts.append(desc)
                     cls_weights.append(description_weight)
 
-            # 3. Class-specific overrides (highest priority)
+            # 3. Class-specific overrides for hardest classes (highest weight)
             if cls_name in class_specific:
                 for p in class_specific[cls_name].get("prompts", []):
                     filled_p = p
@@ -176,7 +175,7 @@ class PromptExecutor(BaseAgent):
                     elif "{}" in filled_p:
                         filled_p = filled_p.replace("{}", cls_name, 1)
                     cls_prompts.append(filled_p)
-                    cls_weights.append(description_weight * 1.2)  # Slight boost
+                    cls_weights.append(description_weight * 1.5)
 
             if not cls_prompts:
                 cls_prompts = [f"a photo of a {cls_name}"]
@@ -197,23 +196,33 @@ class PromptExecutor(BaseAgent):
         }
 
     def _generate_class_descriptions(
-        self, task_spec: TaskSpec, description_prompt: str
+        self, task_spec: TaskSpec, description_prompt: str,
+        class_names: list[str] | None = None,
     ) -> dict[str, list[str]]:
-        """Call LLM to generate visual descriptions for all classes."""
+        """Call LLM to generate CuPL-style visual descriptions for classes.
+
+        Generates short, CLIP-friendly descriptions (not full sentences).
+        Format: "a {class}, which is {visual description}"
+        """
         all_descriptions = {}
+        target_classes = class_names or task_spec.class_names
         batch_size = 25  # Process in batches to stay within token limits
 
-        for i in range(0, len(task_spec.class_names), batch_size):
-            batch = task_spec.class_names[i:i + batch_size]
+        for i in range(0, len(target_classes), batch_size):
+            batch = target_classes[i:i + batch_size]
 
             user_prompt = (
-                f"Generate 3-5 visual descriptions for each class below. "
-                f"Each description should be a complete sentence starting with the class name.\n\n"
+                f"Generate 7-10 short visual descriptions for each class below.\n"
+                f"Format each as: \"a {{class_name}}, {{short visual description}}\"\n"
+                f"Keep descriptions under 15 words. Focus on shape, color, size, texture, habitat.\n\n"
+                f"Examples:\n"
+                f'  "a camel, a large tan animal with humps on its back in a desert"\n'
+                f'  "a ray, a flat diamond-shaped fish with wing-like fins in blue water"\n'
+                f'  "a beetle, a small dark oval insect with a shiny hard shell"\n\n'
                 f"Dataset: {task_spec.dataset_name}\n"
                 f"Resolution: {task_spec.image_resolution or 'unknown'}\n"
                 f"Classes: {', '.join(batch)}\n\n"
-                f"Respond ONLY with JSON: {{\"class_name\": [\"description1\", \"description2\", ...]}}\n"
-                f"Each description must start with or contain the class name."
+                f'Respond ONLY with JSON: {{"class_name": ["desc1", "desc2", ...]}}\n'
             )
 
             try:
@@ -229,8 +238,9 @@ class PromptExecutor(BaseAgent):
                         # Ensure each description contains the class name
                         cleaned = []
                         for d in descs:
-                            if cls.lower() not in d.lower() and cls.replace("_", " ").lower() not in d.lower():
-                                d = f"{cls.replace('_', ' ')}, {d}"
+                            cls_display = cls.replace("_", " ")
+                            if cls.lower() not in d.lower() and cls_display.lower() not in d.lower():
+                                d = f"a {cls_display}, {d}"
                             cleaned.append(d)
                         all_descriptions[cls] = cleaned
                     else:
@@ -251,20 +261,18 @@ class PromptExecutor(BaseAgent):
         )
         return all_descriptions
 
-        return {
-            "type": "classification",
-            "prompts_per_class": prompts_per_class,
-            "ensemble_method": strategy.get("ensemble_method", "weighted_average"),
-        }
-
     def _log_sample_prompts(self, prompts_per_class: dict, n: int = 3) -> None:
         """Log a few sample prompts for debugging."""
         for i, (cls, info) in enumerate(prompts_per_class.items()):
             if i >= n:
                 break
+            total = len(info['prompts'])
+            # Show the first non-template prompt (i.e., descriptions)
+            descs = [p for p in info['prompts'] if not p.startswith(('a bad photo', 'a photo of', 'a rendering', 'graffiti', 'a cropped', 'a tattoo', 'the embroidered', 'a bright', 'a dark', 'a drawing', 'the plastic', 'a close-up', 'a black and white', 'a painting', 'a pixelated', 'a sculpture', 'a jpeg', 'a blurry', 'a good', 'a doodle', 'the origami', 'a sketch', 'a origami', 'a low resolution', 'the toy', 'a rendition', 'a cartoon', 'art of', 'a embroidered', 'itap', 'a plushie', 'the cartoon', 'the plushie', 'a toy', 'a clear', 'a snapshot'))]
+            sample = descs[:3] if descs else info['prompts'][:3]
             logger.info(
-                f"  {cls}: {info['prompts'][:3]} "
-                f"(total: {len(info['prompts'])} prompts)"
+                f"  {cls}: {sample} "
+                f"(total: {total} prompts, {len(descs)} descriptions)"
             )
 
     def _materialize_segmentation_prompts(
