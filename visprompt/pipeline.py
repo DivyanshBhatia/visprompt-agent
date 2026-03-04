@@ -243,6 +243,23 @@ class VisPromptPipeline:
                 logger.info(f"Critic says PASS — stopping after iteration {iteration}")
                 break
 
+            # Hard early-stop: if we've done 2+ iterations and best metric
+            # hasn't improved by > 0.5%, stop regardless of Strategist
+            if iteration >= 1 and result.iterations:
+                best_so_far = max(r.primary_metric for r in result.iterations)
+                current = record.primary_metric
+                if current <= best_so_far and (best_so_far - current) < 0.005:
+                    # Check if ANY iteration improved by > 0.5% over iter 0
+                    iter0_metric = result.iterations[0].primary_metric
+                    if current - iter0_metric < 0.005:
+                        record.continue_iterating = False
+                        result.iterations.append(record)
+                        logger.info(
+                            f"Early stop: no meaningful improvement after {iteration + 1} "
+                            f"iterations (best={best_so_far:.4f}, current={current:.4f})"
+                        )
+                        break
+
             if iteration == max_iterations - 1:
                 record.continue_iterating = False
                 result.iterations.append(record)

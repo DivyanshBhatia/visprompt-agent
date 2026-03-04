@@ -206,60 +206,88 @@ class PromptExecutor(BaseAgent):
         """
         all_descriptions = {}
         target_classes = class_names or task_spec.class_names
-        batch_size = 25  # Process in batches to stay within token limits
+        batch_size = 15  # Keep small to avoid JSON truncation at 4096 max_tokens
 
         for i in range(0, len(target_classes), batch_size):
             batch = target_classes[i:i + batch_size]
-
-            user_prompt = (
-                f"Generate 7-10 short visual descriptions for each class below.\n"
-                f"Format each as: \"a {{class_name}}, {{short visual description}}\"\n"
-                f"Keep descriptions under 15 words. Focus on shape, color, size, texture, habitat.\n\n"
-                f"Examples:\n"
-                f'  "a camel, a large tan animal with humps on its back in a desert"\n'
-                f'  "a ray, a flat diamond-shaped fish with wing-like fins in blue water"\n'
-                f'  "a beetle, a small dark oval insect with a shiny hard shell"\n\n'
-                f"Dataset: {task_spec.dataset_name}\n"
-                f"Resolution: {task_spec.image_resolution or 'unknown'}\n"
-                f"Classes: {', '.join(batch)}\n\n"
-                f'Respond ONLY with JSON: {{"class_name": ["desc1", "desc2", ...]}}\n'
+            result = self._generate_descriptions_for_batch(
+                batch, task_spec, description_prompt
             )
-
-            try:
-                result = self.llm.call_json(
-                    prompt=user_prompt,
-                    system=description_prompt,
-                    agent_name="description_generator",
-                )
-
-                for cls in batch:
-                    descs = result.get(cls, result.get(cls.replace("_", " "), []))
-                    if isinstance(descs, list) and descs:
-                        # Ensure each description contains the class name
-                        cleaned = []
-                        for d in descs:
-                            cls_display = cls.replace("_", " ")
-                            if cls.lower() not in d.lower() and cls_display.lower() not in d.lower():
-                                d = f"a {cls_display}, {d}"
-                            cleaned.append(d)
-                        all_descriptions[cls] = cleaned
-                    else:
-                        all_descriptions[cls] = [
-                            f"a {cls.replace('_', ' ')} in a typical setting"
-                        ]
-
-            except Exception as e:
-                logger.warning(f"Description generation failed for batch {i}: {e}")
-                for cls in batch:
-                    all_descriptions[cls] = [
-                        f"a {cls.replace('_', ' ')} in a typical setting"
-                    ]
+            all_descriptions.update(result)
 
         logger.info(
             f"[{self.name}] Generated descriptions for "
             f"{len(all_descriptions)} classes"
         )
         return all_descriptions
+
+    def _generate_descriptions_for_batch(
+        self, batch: list[str], task_spec: TaskSpec, description_prompt: str,
+    ) -> dict[str, list[str]]:
+        """Generate descriptions for a single batch with retry on failure."""
+        user_prompt = (
+            f"Generate 7-10 short visual descriptions for each class below.\n"
+            f"Format each as: \"a {{class_name}}, {{short visual description}}\"\n"
+            f"Keep descriptions under 15 words. Focus on shape, color, size, texture, habitat.\n\n"
+            f"Examples:\n"
+            f'  "a camel, a large tan animal with humps on its back in a desert"\n'
+            f'  "a ray, a flat diamond-shaped fish with wing-like fins in blue water"\n'
+            f'  "a beetle, a small dark oval insect with a shiny hard shell"\n\n'
+            f"Dataset: {task_spec.dataset_name}\n"
+            f"Resolution: {task_spec.image_resolution or 'unknown'}\n"
+            f"Classes: {', '.join(batch)}\n\n"
+            f'Respond ONLY with JSON: {{"class_name": ["desc1", "desc2", ...]}}\n'
+        )
+
+        try:
+            result = self.llm.call_json(
+                prompt=user_prompt,
+                system=description_prompt,
+                agent_name="description_generator",
+            )
+            return self._parse_description_result(result, batch)
+
+        except Exception as e:
+            logger.warning(f"Description generation failed for batch of {len(batch)}: {e}")
+
+            # Retry with smaller sub-batches if batch > 5
+            if len(batch) > 5:
+                logger.info(f"[{self.name}] Retrying with smaller sub-batches...")
+                result = {}
+                mid = len(batch) // 2
+                for sub_batch in [batch[:mid], batch[mid:]]:
+                    sub_result = self._generate_descriptions_for_batch(
+                        sub_batch, task_spec, description_prompt
+                    )
+                    result.update(sub_result)
+                return result
+
+            # Final fallback for very small batches
+            return {
+                cls: [f"a {cls.replace('_', ' ')} in a typical setting"]
+                for cls in batch
+            }
+
+    def _parse_description_result(
+        self, result: dict, batch: list[str]
+    ) -> dict[str, list[str]]:
+        """Parse and clean LLM description results for a batch."""
+        descriptions = {}
+        for cls in batch:
+            descs = result.get(cls, result.get(cls.replace("_", " "), []))
+            if isinstance(descs, list) and descs:
+                cleaned = []
+                for d in descs:
+                    cls_display = cls.replace("_", " ")
+                    if cls.lower() not in d.lower() and cls_display.lower() not in d.lower():
+                        d = f"a {cls_display}, {d}"
+                    cleaned.append(d)
+                descriptions[cls] = cleaned
+            else:
+                descriptions[cls] = [
+                    f"a {cls.replace('_', ' ')} in a typical setting"
+                ]
+        return descriptions
 
     def _log_sample_prompts(self, prompts_per_class: dict, n: int = 3) -> None:
         """Log a few sample prompts for debugging."""
