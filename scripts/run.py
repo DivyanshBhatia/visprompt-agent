@@ -71,14 +71,14 @@ def build_task_runner(args, task_spec: TaskSpec):
             labels = np.array(dataset.targets)[indices]
 
             runner = CLIPClassificationRunner(
-                clip_model_name=args.clip_model or "ViT-B/32",
+                clip_model_name=args.clip_model or "ViT-L/14",
                 device=device,
                 images=images,
                 labels=labels,
             )
         else:
             runner = CLIPClassificationRunner(
-                clip_model_name=args.clip_model or "ViT-B/32",
+                clip_model_name=args.clip_model or "ViT-L/14",
                 device=device,
             )
 
@@ -219,7 +219,7 @@ def main():
     parser.add_argument("--val-size", type=int, default=5000, help="Validation split size")
 
     # Models
-    parser.add_argument("--clip-model", type=str, default="ViT-B/32")
+    parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--sam-checkpoint", type=str)
     parser.add_argument("--sam-model-type", type=str, default="vit_b")
     parser.add_argument("--gdino-config", type=str)

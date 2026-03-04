@@ -129,8 +129,13 @@ class PromptExecutor(BaseAgent):
         # ── Extract strategy fields ──────────────────────────────────────
         description_prompt = strategy.get("description_prompt", "")
         class_specific = strategy.get("class_specific_prompts", {})
-        base_weight = strategy.get("base_weight", 0.3)
-        description_weight = strategy.get("description_weight", 0.7)
+        base_weight = strategy.get("base_weight", 0.55)
+        description_weight = strategy.get("description_weight", 0.45)
+
+        # Clamp weights to safe range based on experimental results:
+        # 30/70 (desc-heavy) hurts stable classes; 80/20 (base-heavy) wastes descriptions
+        base_weight = max(0.45, min(0.65, base_weight))
+        description_weight = 1.0 - base_weight  # Ensure they sum to 1.0
 
         # ── Generate per-class descriptions via LLM (cached) ─────────────
         class_descriptions = {}
@@ -281,6 +286,13 @@ class PromptExecutor(BaseAgent):
             f"Generate 10-15 short visual descriptions for each class below.\n"
             f"Format each as: \"a {{class_name}}, {{short visual description}}\"\n"
             f"Keep descriptions under 15 words. Focus on shape, color, size, texture, habitat.\n\n"
+            f"IMPORTANT: Make each description DIFFERENT — vary the visual angle:\n"
+            f"  - Overall shape and silhouette\n"
+            f"  - Dominant color/pattern (what you'd see at 32x32 pixels)\n"
+            f"  - Typical context/setting/background\n"
+            f"  - Size relative to image frame\n"
+            f"  - Texture or surface appearance\n"
+            f"  - Key distinguishing feature vs similar classes\n\n"
             f"Examples:\n"
             f'  "a camel, a large tan animal with humps on its back in a desert"\n'
             f'  "a ray, a flat diamond-shaped fish with wing-like fins in blue water"\n'

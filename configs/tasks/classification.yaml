@@ -11,8 +11,8 @@ val_split_size: 5000
 
 # CLIP model variants to evaluate
 clip_models:
-  - ViT-B/32
   - ViT-L/14
+  - ViT-B/32
 
 # Known challenges at 32x32 resolution
 notes: >

@@ -47,9 +47,10 @@ Output JSON with:
 }
 
 RULES:
-1. base_weight (0.2-0.4): GROUP weight for the entire 80-template ensemble.
+1. base_weight (0.5-0.6): GROUP weight for the entire 80-template ensemble.
    This is NOT per-prompt — it's the fraction of signal from all base templates combined.
-   Example: base_weight=0.3 means 30% of the final embedding comes from base templates.
+   Example: base_weight=0.55 means 55% of the final embedding comes from base templates.
+   The 80 templates provide robust stability and should get majority weight.
    The 80 templates are added automatically — do NOT include base_templates.
 
 2. description_prompt: A system prompt sent to the LLM to generate 10-15 SHORT visual
@@ -57,9 +58,11 @@ RULES:
    Emphasize: "Generate short descriptions under 15 words each. Format: 'a {class}, {visual features}'.
    Focus on shape, dominant color, size, texture, and typical setting visible at low resolution."
 
-3. description_weight (0.6-0.8): GROUP weight for all descriptions combined.
-   Example: description_weight=0.7 means 70% of the final embedding comes from descriptions.
+3. description_weight (0.4-0.5): GROUP weight for all descriptions combined.
+   Example: description_weight=0.45 means 45% of the final embedding comes from descriptions.
    base_weight + description_weight should sum to 1.0 (they are group fractions).
+   IMPORTANT: Do NOT make description_weight higher than base_weight. The 80 templates
+   provide robust coverage; descriptions add discriminative detail on top.
 
 4. class_specific_prompts: Write DISCRIMINATIVE prompts ONLY for the hardest confusion
    pairs (5-15 classes). These should highlight what makes each class DIFFERENT from
