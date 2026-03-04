@@ -132,9 +132,9 @@ class PromptExecutor(BaseAgent):
         base_weight = strategy.get("base_weight", 0.55)
         description_weight = strategy.get("description_weight", 0.45)
 
-        # Clamp weights to safe range based on experimental results:
-        # 30/70 (desc-heavy) hurts stable classes; 80/20 (base-heavy) wastes descriptions
-        base_weight = max(0.45, min(0.65, base_weight))
+        # Clamp weights to safe range based on ablation results:
+        # Optimal: 70/30 (base/desc). Curve peaks at 70/30, drops both sides.
+        base_weight = max(0.60, min(0.80, base_weight))
         description_weight = 1.0 - base_weight  # Ensure they sum to 1.0
 
         # ── Generate per-class descriptions via LLM (cached) ─────────────

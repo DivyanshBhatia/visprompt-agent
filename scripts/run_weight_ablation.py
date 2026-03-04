@@ -205,6 +205,57 @@ def main():
     print(f"Templates-only baseline: {baseline_acc:.4f}")
     print(f"Improvement: {best['accuracy'] - baseline_acc:+.4f}")
 
+    # ── Step 3: Temperature search at best weight ─────────────────────
+    print(f"\n{'='*60}")
+    print(f"  TEMPERATURE SEARCH — at {best['label']}")
+    print(f"{'='*60}")
+    print(f"{'Temperature':<20} {'Accuracy':>10} {'Delta vs best':>15}")
+    print(f"{'-'*60}")
+
+    best_weight_prompts = build_prompts_with_weights(
+        task_spec.class_names, descriptions,
+        best["base_weight"], best["desc_weight"]
+    )
+
+    temp_results = []
+    for temp in [None, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]:
+        result = task_runner.evaluate(best_weight_prompts, task_spec, temperature=temp)
+        acc = result.primary_metric
+        delta = acc - best["accuracy"]
+        label = f"T={temp}" if temp is not None else "T=default (CLIP)"
+        marker = " ← BEST" if acc >= max((r["accuracy"] for r in temp_results), default=0) else ""
+        print(f"{label:<20} {acc:>10.4f} {delta:>+14.4f}{marker}")
+        temp_results.append({
+            "temperature": temp,
+            "label": label,
+            "accuracy": acc,
+            "delta_vs_no_temp": delta,
+        })
+
+    best_temp = max(temp_results, key=lambda r: r["accuracy"])
+    print(f"{'='*60}")
+    print(f"\nBest temperature: {best_temp['label']} → {best_temp['accuracy']:.4f}")
+    print(f"Combined improvement over templates-only: "
+          f"{best_temp['accuracy'] - baseline_acc:+.4f}")
+
+    # ── Step 4: Also test templates-only + best temperature ───────────
+    print(f"\n--- Templates-only + best temperature ---")
+    if best_temp["temperature"] is not None:
+        templates_only_prompts = build_prompts_with_weights(
+            task_spec.class_names, descriptions, 1.0, 0.0
+        )
+        result = task_runner.evaluate(
+            templates_only_prompts, task_spec,
+            temperature=best_temp["temperature"]
+        )
+        print(f"Templates-only + {best_temp['label']}: {result.primary_metric:.4f}")
+        print(f"→ Temperature alone contributes: "
+              f"{result.primary_metric - baseline_acc:+.4f}")
+        print(f"→ Descriptions contribute: "
+              f"{best_temp['accuracy'] - result.primary_metric:+.4f}")
+    else:
+        print(f"Best temperature is default — no isolated test needed")
+
     # ── Save results ──────────────────────────────────────────────────
     output_path = Path(args.output_dir) / f"weight_ablation_{args.clip_model.replace('/', '_')}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,8 +265,12 @@ def main():
             "dataset": args.dataset,
             "val_size": args.val_size,
             "description_cost": desc_cost,
-            "results": results,
-            "best_config": best,
+            "weight_results": results,
+            "best_weight_config": best,
+            "temperature_results": temp_results,
+            "best_temperature_config": best_temp,
+            "final_best_accuracy": best_temp["accuracy"],
+            "improvement_over_baseline": best_temp["accuracy"] - baseline_acc,
         }, f, indent=2, default=str)
 
     print(f"\nResults saved to: {output_path}")

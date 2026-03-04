@@ -166,7 +166,7 @@ class CLIPClassificationRunner(BaseTaskRunner):
         )
         return all_features
 
-    def evaluate(self, prompts, task_spec):
+    def evaluate(self, prompts, task_spec, temperature=None):
         """Run zero-shot classification with logit-level ensembling + TTA.
 
         Architecture:
@@ -179,6 +179,9 @@ class CLIPClassificationRunner(BaseTaskRunner):
 
         3. IMAGE FEATURE CACHING: Images don't change between refinement
            iterations. We encode images once and reuse for all subsequent calls.
+
+        4. TEMPERATURE SCALING: Optional softmax temperature for calibration.
+           Lower temperature = sharper predictions (more confident).
         """
         self._ensure_model()
         self.load_data()
@@ -243,6 +246,11 @@ class CLIPClassificationRunner(BaseTaskRunner):
 
             # Average TTA logits
             logits = (logits_orig + logits_flip) / 2.0
+
+            # Apply temperature scaling if specified
+            if temperature is not None and temperature > 0:
+                logits = logits / temperature
+
             probs = logits.softmax(dim=-1)
 
         all_preds = probs.argmax(dim=-1).detach().cpu().numpy()
@@ -258,6 +266,7 @@ class CLIPClassificationRunner(BaseTaskRunner):
         result.metadata["n_samples"] = n_samples
         result.metadata["ensemble_method"] = "logit_level"
         result.metadata["tta"] = True
+        result.metadata["temperature"] = temperature
         result.metadata["image_cache_hits"] = len(self._image_features_cache)
         result.metadata["n_prompts_per_class"] = {
             cls: len(prompts_per_class.get(cls, {}).get("prompts", []))

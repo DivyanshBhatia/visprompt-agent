@@ -148,61 +148,93 @@ class BaselineRunner:
         self,
         llm_model: str = "gpt-4o",
         llm_provider: str = "openai",
-        n_descriptions: int = 5,
-    ) -> EvalResult:
-        """Baseline: CuPL (Pratt et al. 2023) - LLM generates class descriptions."""
+        n_descriptions: int = 10,
+    ) -> tuple[EvalResult, EvalResult]:
+        """Baseline: CuPL (Pratt et al. 2023) - LLM generates class descriptions.
+
+        Returns two results:
+        - cupl: descriptions only (original CuPL)
+        - cupl_ensemble: descriptions + 80-template ensemble (CuPL+e)
+        """
         logger.info("Running baseline: CuPL")
         cost_tracker = CostTracker()
         llm = LLMClient(
             model=llm_model, provider=llm_provider, cost_tracker=cost_tracker
         )
 
-        prompts_per_class = {}
-        batch_size = 20  # Process classes in batches to reduce API calls
+        descriptions_per_class = {}
+        batch_size = 10  # Small batches to avoid truncation
 
         for i in range(0, len(self.task_spec.class_names), batch_size):
             batch = self.task_spec.class_names[i:i + batch_size]
             prompt = (
-                f"For each of these visual classes, generate {n_descriptions} "
-                f"concise visual descriptions that would help identify the object "
-                f"in an image. Focus on distinctive visual features.\n\n"
+                f"Generate {n_descriptions} short visual descriptions for each class below.\n"
+                f"Format each as: \"a {{class_name}}, {{short visual description}}\"\n"
+                f"Keep descriptions under 15 words. Focus on shape, color, size, texture.\n\n"
                 f"Classes: {', '.join(batch)}\n\n"
-                f"Respond with JSON: {{\"class_name\": [\"desc1\", \"desc2\", ...]}}"
+                f'Respond ONLY with JSON: {{"class_name": ["desc1", "desc2", ...]}}\n'
             )
 
             try:
-                descriptions = llm.call_json(
+                result = llm.call_json(
                     prompt=prompt,
                     system="Generate visual descriptions for image classification.",
                     agent_name="cupl_baseline",
                 )
-
                 for cls in batch:
-                    descs = descriptions.get(cls, [f"a photo of a {cls}"])
-                    full_prompts = [f"a photo of a {cls}"] + [
-                        f"{desc}" for desc in descs
-                    ]
-                    prompts_per_class[cls] = {
-                        "prompts": full_prompts,
-                        "weights": [1.0] * len(full_prompts),
-                    }
+                    descs = result.get(cls, result.get(cls.replace("_", " "), []))
+                    if isinstance(descs, list) and descs:
+                        cleaned = []
+                        for d in descs:
+                            cls_display = cls.replace("_", " ")
+                            if cls.lower() not in d.lower() and cls_display.lower() not in d.lower():
+                                d = f"a {cls_display}, {d}"
+                            cleaned.append(d)
+                        descriptions_per_class[cls] = cleaned
+                    else:
+                        descriptions_per_class[cls] = [f"a photo of a {cls.replace('_', ' ')}"]
             except Exception as e:
                 logger.warning(f"CuPL batch failed: {e}")
                 for cls in batch:
-                    prompts_per_class[cls] = {
-                        "prompts": [f"a photo of a {cls}"],
-                        "weights": [1.0],
-                    }
+                    descriptions_per_class[cls] = [f"a photo of a {cls.replace('_', ' ')}"]
 
-        prompts = {
+        # ── Variant 1: CuPL (descriptions only) ──────────────────────────
+        cupl_prompts = {
             "type": "classification",
-            "prompts_per_class": prompts_per_class,
+            "prompts_per_class": {
+                cls: {
+                    "prompts": descriptions_per_class.get(cls, [f"a photo of a {cls}"]),
+                    "weights": [1.0] * len(descriptions_per_class.get(cls, [f"a photo of a {cls}"])),
+                }
+                for cls in self.task_spec.class_names
+            },
             "ensemble_method": "weighted_average",
         }
+        cupl_result = self.task_runner.evaluate(cupl_prompts, self.task_spec)
+        cupl_result.metadata["cupl_cost"] = cost_tracker.summary()
 
-        result = self.task_runner.evaluate(prompts, self.task_spec)
-        result.metadata["cupl_cost"] = cost_tracker.summary()
-        return result
+        # ── Variant 2: CuPL+e (descriptions + 80-template ensemble) ──────
+        cupl_e_prompts = {
+            "type": "classification",
+            "prompts_per_class": {
+                cls: {
+                    "prompts": (
+                        [t.format(cls) for t in IMAGENET_TEMPLATES] +
+                        descriptions_per_class.get(cls, [])
+                    ),
+                    "weights": (
+                        [1.0] * len(IMAGENET_TEMPLATES) +
+                        [1.0] * len(descriptions_per_class.get(cls, []))
+                    ),
+                }
+                for cls in self.task_spec.class_names
+            },
+            "ensemble_method": "weighted_average",
+        }
+        cupl_e_result = self.task_runner.evaluate(cupl_e_prompts, self.task_spec)
+        cupl_e_result.metadata["cupl_cost"] = cost_tracker.summary()
+
+        return cupl_result, cupl_e_result
 
     def run_waffle_clip(self, n_random: int = 15, vocab_size: int = 1000) -> EvalResult:
         """Baseline: WaffleCLIP (Roth et al. 2023) - random descriptor ensembles."""
@@ -253,7 +285,9 @@ class BaselineRunner:
         results["waffle_clip"] = self.run_waffle_clip()
 
         try:
-            results["cupl"] = self.run_cupl(llm_model, llm_provider)
+            cupl_result, cupl_e_result = self.run_cupl(llm_model, llm_provider)
+            results["cupl"] = cupl_result
+            results["cupl_ensemble"] = cupl_e_result
         except Exception as e:
             logger.warning(f"CuPL baseline failed: {e}")
 
