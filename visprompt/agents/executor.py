@@ -114,68 +114,142 @@ class PromptExecutor(BaseAgent):
     def _materialize_classification_prompts(
         self, task_spec: TaskSpec, strategy: dict
     ) -> dict[str, Any]:
-        """Build per-class prompt lists from the hierarchical strategy."""
-        prompts_per_class = {}
-        levels = strategy.get("levels", [])
-        class_specific = strategy.get("class_specific_prompts", {})
-        ensemble_weights = strategy.get("ensemble_weights", [1.0] * len(levels))
+        """Build per-class prompt lists from the strategy.
 
+        New flow:
+        1. Base templates (generic, low weight)
+        2. LLM-generated per-class visual descriptions (high weight)
+        3. Class-specific overrides for hardest classes (high weight)
+        """
+        prompts_per_class = {}
+
+        # ── Extract strategy fields ──────────────────────────────────────
+        base_templates = strategy.get("base_templates", [])
+        # Fallback: support old "levels" format
+        if not base_templates and "levels" in strategy:
+            for level in strategy["levels"]:
+                base_templates.extend(level.get("templates", []))
+        if not base_templates:
+            base_templates = ["a photo of a {class}."]
+
+        description_prompt = strategy.get("description_prompt", "")
+        class_specific = strategy.get("class_specific_prompts", {})
+        base_weight = strategy.get("base_weight", 0.25)
+        description_weight = strategy.get("description_weight", 0.75)
+
+        # ── Generate per-class descriptions via LLM ──────────────────────
+        class_descriptions = {}
+        if description_prompt:
+            class_descriptions = self._generate_class_descriptions(
+                task_spec, description_prompt
+            )
+
+        # ── Assemble per-class prompts ───────────────────────────────────
         for cls_name in task_spec.class_names:
             cls_prompts = []
             cls_weights = []
 
-            for level, weight in zip(levels, ensemble_weights):
-                target = level.get("target_classes", "all")
-                # If target is a list, check if it contains actual class names
-                # or category labels (like "animals") that won't match individual classes
-                if target != "all" and isinstance(target, list):
-                    # Check if any target matches actual class names
-                    if not any(t in task_spec.class_names for t in target):
-                        # These are category labels, not class names — apply to all
-                        target = "all"
-                    elif cls_name not in target:
-                        continue
-                elif target != "all":
-                    continue
+            # 1. Base templates
+            for template in base_templates:
+                filled = template
+                if "{class}" in filled:
+                    filled = filled.replace("{class}", cls_name)
+                elif "{}" in filled:
+                    filled = filled.replace("{}", cls_name, 1)
+                else:
+                    filled = f"a photo of a {cls_name}"
+                cls_prompts.append(filled)
+                cls_weights.append(base_weight)
 
-                for template in level.get("templates", []):
-                    # Handle multiple placeholder styles the LLM might use
-                    filled = template
-                    if "{class}" in filled:
-                        filled = filled.replace("{class}", cls_name)
-                    elif "{}" in filled:
-                        filled = filled.replace("{}", cls_name, 1)
-                    elif cls_name not in filled.lower():
-                        # Template has no placeholder — prepend class name
-                        filled = f"a photo of a {cls_name}"
-                    # Also handle {superclass} if hierarchy exists
-                    if "{superclass}" in filled and task_spec.class_hierarchy:
-                        for super_cls, sub_classes in task_spec.class_hierarchy.items():
-                            if cls_name in sub_classes:
-                                filled = filled.replace("{superclass}", super_cls)
-                                break
-                    cls_prompts.append(filled)
-                    cls_weights.append(weight)
+            # 2. LLM-generated descriptions
+            if cls_name in class_descriptions:
+                for desc in class_descriptions[cls_name]:
+                    cls_prompts.append(desc)
+                    cls_weights.append(description_weight)
 
-            # Add class-specific overrides
+            # 3. Class-specific overrides (highest priority)
             if cls_name in class_specific:
                 for p in class_specific[cls_name].get("prompts", []):
-                    # Fill in placeholders in class-specific prompts too
                     filled_p = p
                     if "{class}" in filled_p:
                         filled_p = filled_p.replace("{class}", cls_name)
                     elif "{}" in filled_p:
                         filled_p = filled_p.replace("{}", cls_name, 1)
                     cls_prompts.append(filled_p)
-                    cls_weights.append(max(ensemble_weights) if ensemble_weights else 1.0)
+                    cls_weights.append(description_weight * 1.2)  # Slight boost
+
+            if not cls_prompts:
+                cls_prompts = [f"a photo of a {cls_name}"]
+                cls_weights = [1.0]
 
             prompts_per_class[cls_name] = {
-                "prompts": cls_prompts if cls_prompts else [f"a photo of a {cls_name}"],
-                "weights": cls_weights if cls_weights else [1.0],
+                "prompts": cls_prompts,
+                "weights": cls_weights,
             }
 
         logger.info(f"[{self.name}] Sample prompts after materialization:")
-        self._log_sample_prompts(prompts_per_class)
+        self._log_sample_prompts(prompts_per_class, n=5)
+
+        return {
+            "type": "classification",
+            "prompts_per_class": prompts_per_class,
+            "ensemble_method": strategy.get("ensemble_method", "weighted_average"),
+        }
+
+    def _generate_class_descriptions(
+        self, task_spec: TaskSpec, description_prompt: str
+    ) -> dict[str, list[str]]:
+        """Call LLM to generate visual descriptions for all classes."""
+        all_descriptions = {}
+        batch_size = 25  # Process in batches to stay within token limits
+
+        for i in range(0, len(task_spec.class_names), batch_size):
+            batch = task_spec.class_names[i:i + batch_size]
+
+            user_prompt = (
+                f"Generate 3-5 visual descriptions for each class below. "
+                f"Each description should be a complete sentence starting with the class name.\n\n"
+                f"Dataset: {task_spec.dataset_name}\n"
+                f"Resolution: {task_spec.image_resolution or 'unknown'}\n"
+                f"Classes: {', '.join(batch)}\n\n"
+                f"Respond ONLY with JSON: {{\"class_name\": [\"description1\", \"description2\", ...]}}\n"
+                f"Each description must start with or contain the class name."
+            )
+
+            try:
+                result = self.llm.call_json(
+                    prompt=user_prompt,
+                    system=description_prompt,
+                    agent_name="description_generator",
+                )
+
+                for cls in batch:
+                    descs = result.get(cls, result.get(cls.replace("_", " "), []))
+                    if isinstance(descs, list) and descs:
+                        # Ensure each description contains the class name
+                        cleaned = []
+                        for d in descs:
+                            if cls.lower() not in d.lower() and cls.replace("_", " ").lower() not in d.lower():
+                                d = f"{cls.replace('_', ' ')}, {d}"
+                            cleaned.append(d)
+                        all_descriptions[cls] = cleaned
+                    else:
+                        all_descriptions[cls] = [
+                            f"a {cls.replace('_', ' ')} in a typical setting"
+                        ]
+
+            except Exception as e:
+                logger.warning(f"Description generation failed for batch {i}: {e}")
+                for cls in batch:
+                    all_descriptions[cls] = [
+                        f"a {cls.replace('_', ' ')} in a typical setting"
+                    ]
+
+        logger.info(
+            f"[{self.name}] Generated descriptions for "
+            f"{len(all_descriptions)} classes"
+        )
+        return all_descriptions
 
         return {
             "type": "classification",

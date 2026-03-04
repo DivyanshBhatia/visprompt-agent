@@ -15,48 +15,58 @@ from visprompt.agents.base import AgentMessage, BaseAgent, TaskSpec
 
 logger = logging.getLogger(__name__)
 
-PLANNER_SYSTEM_CLASSIFICATION = """You are the Prompt Planner for zero-shot CLASSIFICATION.
+PLANNER_SYSTEM_CLASSIFICATION = """You are the Prompt Planner for zero-shot CLASSIFICATION with CLIP.
 
-Given the Dataset Analyst's report, design a hierarchical prompt strategy for CLIP.
+Given the Dataset Analyst's report, design a prompt strategy that BEATS standard template ensembles.
+
+KEY INSIGHT: CLIP benefits from class-specific visual descriptions far more than generic template
+variations. "a photo of a {class}" and "a blurry photo of a {class}" produce nearly identical
+embeddings. What works is describing WHAT the class looks like:
+  - "a camel, a large tan animal with one or two humps on its back in a desert"
+  - "a ray, a flat diamond-shaped fish with a long thin tail swimming in the ocean"
 
 Output JSON with:
 {
   "strategy_name": str,
-  "levels": [
-    {
-      "level": int,
-      "name": str,
-      "description": str,
-      "templates": [str],
-      "target_classes": "all" | [str],
-      "weight": float
-    }
-  ],
+  "base_templates": [str],
+  "description_prompt": str,
   "class_specific_prompts": {
     "class_name": {
       "prompts": [str],
       "rationale": str
     }
   },
-  "ensemble_method": "weighted_average" | "max_similarity" | "rank_fusion",
-  "ensemble_weights": [float],
+  "ensemble_method": "weighted_average",
+  "base_weight": float,
+  "description_weight": float,
   "rationale": str
 }
 
-Guidelines:
-- Level 1: Base templates (all classes). Include resolution-aware variants.
-- Level 2: Hierarchical context using superclasses or domain groupings.
-- Level 3: Confusion-pair discriminators targeting the Analyst's hardest pairs.
-- class_specific_prompts: Override prompts for the most confused classes.
-- Be specific about visual attributes: texture, color, shape, habitat, context.
+RULES:
+1. base_templates: 3-5 simple templates using {class} placeholder.
+   Example: ["a photo of a {class}.", "a photo of the {class}."]
+   These get base_weight (should be LOW, e.g. 0.2-0.3).
 
-CRITICAL: In templates, use {class} as the placeholder for the class name.
-Example templates: ["a photo of a {class}.", "a blurry photo of a {class}."]
-In class_specific_prompts, write COMPLETE prompts with the class name already filled in.
-Example: "girl": {"prompts": ["a young girl playing on a playground", "a child girl with pigtails"]}
-Do NOT use {} or {class_name} — only {class} for templates.
-For target_classes: use "all" to apply templates to every class, or a list of
-EXACT class names (e.g., ["girl", "boy", "woman"]) to target specific ones.
+2. description_prompt: A system prompt that will be sent to the LLM to generate
+   visual descriptions for EVERY class. This is the most important part.
+   The descriptions should emphasize: shape, color, texture, size, habitat/context,
+   and distinctive features visible even at low resolution.
+   Be specific: "Describe what each class looks like visually, focusing on
+   features distinguishable at 32x32 resolution: overall shape, dominant colors,
+   typical background/setting."
+
+3. class_specific_prompts: Write prompts ONLY for the Analyst's hardest confusion
+   pairs (5-15 classes max). These should be discriminative descriptions.
+   Write COMPLETE prompts with class names filled in.
+   Example: "ray": {"prompts": ["a manta ray, flat diamond-shaped body gliding through blue water",
+                                 "a stingray, a flat grey fish with wing-like fins near the ocean floor"]}
+   These get description_weight (should be HIGH, e.g. 0.7-0.8).
+
+CRITICAL:
+- NEVER use negation ("not a X") — CLIP ignores negation.
+- NEVER use unreachable placeholders like {habitat}. Only {class} is supported.
+- base_weight + description_weight should roughly sum to 1.0.
+- Focus class_specific_prompts on classes the Analyst flagged as hardest.
 """
 
 PLANNER_SYSTEM_SEGMENTATION = """You are the Prompt Planner for interactive SEGMENTATION.
@@ -143,7 +153,11 @@ Strategist's refinement recommendations:
 {strategist_recs}
 
 Update your strategy to address the diagnosed issues.
-Keep what worked, change what didn't. Be specific about what changed and why.
+- Keep base_templates that worked.
+- Refine description_prompt to generate better descriptions for failing classes.
+- Add/update class_specific_prompts for classes the Strategist identified.
+- Adjust base_weight and description_weight if the balance was wrong.
+- NEVER use negation ("not a X") in any prompt.
 """
 
 
