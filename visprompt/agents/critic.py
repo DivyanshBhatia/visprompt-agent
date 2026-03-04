@@ -1,5 +1,9 @@
 """Quality Critic agent: auto-generates and runs visual unit tests.
 
+KEY DIFFERENTIATOR from AutoKaggle. Instead of hand-written tests,
+the Critic uses LLM reasoning to generate task-appropriate tests at runtime.
+This eliminates the fairness concern that sank AutoKaggle at ICLR 2025.
+
 Ablation: auto-generated tests ≈ hand-written tests (-0.3%), but removing
 the Critic entirely costs ~2.5%.
 """

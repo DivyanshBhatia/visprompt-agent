@@ -126,11 +126,28 @@ class PromptExecutor(BaseAgent):
 
             for level, weight in zip(levels, ensemble_weights):
                 target = level.get("target_classes", "all")
-                if target != "all" and cls_name not in target:
+                # If target is a list, check if it contains actual class names
+                # or category labels (like "animals") that won't match individual classes
+                if target != "all" and isinstance(target, list):
+                    # Check if any target matches actual class names
+                    if not any(t in task_spec.class_names for t in target):
+                        # These are category labels, not class names — apply to all
+                        target = "all"
+                    elif cls_name not in target:
+                        continue
+                elif target != "all":
                     continue
 
                 for template in level.get("templates", []):
-                    filled = template.replace("{class}", cls_name)
+                    # Handle multiple placeholder styles the LLM might use
+                    filled = template
+                    if "{class}" in filled:
+                        filled = filled.replace("{class}", cls_name)
+                    elif "{}" in filled:
+                        filled = filled.replace("{}", cls_name, 1)
+                    elif cls_name not in filled.lower():
+                        # Template has no placeholder — prepend class name
+                        filled = f"a photo of a {cls_name}"
                     # Also handle {superclass} if hierarchy exists
                     if "{superclass}" in filled and task_spec.class_hierarchy:
                         for super_cls, sub_classes in task_spec.class_hierarchy.items():
@@ -143,7 +160,13 @@ class PromptExecutor(BaseAgent):
             # Add class-specific overrides
             if cls_name in class_specific:
                 for p in class_specific[cls_name].get("prompts", []):
-                    cls_prompts.append(p)
+                    # Fill in placeholders in class-specific prompts too
+                    filled_p = p
+                    if "{class}" in filled_p:
+                        filled_p = filled_p.replace("{class}", cls_name)
+                    elif "{}" in filled_p:
+                        filled_p = filled_p.replace("{}", cls_name, 1)
+                    cls_prompts.append(filled_p)
                     cls_weights.append(max(ensemble_weights) if ensemble_weights else 1.0)
 
             prompts_per_class[cls_name] = {
@@ -151,11 +174,24 @@ class PromptExecutor(BaseAgent):
                 "weights": cls_weights if cls_weights else [1.0],
             }
 
+        logger.info(f"[{self.name}] Sample prompts after materialization:")
+        self._log_sample_prompts(prompts_per_class)
+
         return {
             "type": "classification",
             "prompts_per_class": prompts_per_class,
             "ensemble_method": strategy.get("ensemble_method", "weighted_average"),
         }
+
+    def _log_sample_prompts(self, prompts_per_class: dict, n: int = 3) -> None:
+        """Log a few sample prompts for debugging."""
+        for i, (cls, info) in enumerate(prompts_per_class.items()):
+            if i >= n:
+                break
+            logger.info(
+                f"  {cls}: {info['prompts'][:3]} "
+                f"(total: {len(info['prompts'])} prompts)"
+            )
 
     def _materialize_segmentation_prompts(
         self, task_spec: TaskSpec, strategy: dict

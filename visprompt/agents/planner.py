@@ -49,6 +49,14 @@ Guidelines:
 - Level 3: Confusion-pair discriminators targeting the Analyst's hardest pairs.
 - class_specific_prompts: Override prompts for the most confused classes.
 - Be specific about visual attributes: texture, color, shape, habitat, context.
+
+CRITICAL: In templates, use {class} as the placeholder for the class name.
+Example templates: ["a photo of a {class}.", "a blurry photo of a {class}."]
+In class_specific_prompts, write COMPLETE prompts with the class name already filled in.
+Example: "girl": {"prompts": ["a young girl playing on a playground", "a child girl with pigtails"]}
+Do NOT use {} or {class_name} — only {class} for templates.
+For target_classes: use "all" to apply templates to every class, or a list of
+EXACT class names (e.g., ["girl", "boy", "woman"]) to target specific ones.
 """
 
 PLANNER_SYSTEM_SEGMENTATION = """You are the Prompt Planner for interactive SEGMENTATION.

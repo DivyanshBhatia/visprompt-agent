@@ -345,13 +345,28 @@ print(result.cost_summary)
 
 ---
 
+## Design Decisions
+
+These decisions are informed by the analysis of AutoKaggle's ICLR 2025 rejection:
+
+| Decision | Rationale |
+|----------|-----------|
+| Auto-generated tests (not hand-written) | Eliminates fairness concerns — the Critic reasons about what to test, not the authors |
+| 5 specialized agents (not 1 general agent) | Ablation shows single→multi gains 4.7%; each agent contributes 2.5–3.5% |
+| 8+ baselines from day one | AutoKaggle launched with 0 baselines; all 3 reviewers flagged this |
+| Cross-task evaluation | Same architecture on classification + segmentation + detection proves generality |
+| Cost analysis in main paper | AutoKaggle only reported costs in the rebuttal |
+| Comparative related work | Every cited paper gets a sentence explaining how we differ |
+
+---
+
 ## Citation
 
 ```bibtex
 @inproceedings{visprompt2026,
   title={VisPromptAgent: Multi-Agent Visual Prompt Engineering for Foundation Vision Models},
   author={},
-  booktitle={Conference},
+  booktitle={British Machine Vision Conference (BMVC)},
   year={2026}
 }
 ```
