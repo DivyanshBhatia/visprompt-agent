@@ -1,0 +1,17 @@
+# DAVIS 2017 interactive segmentation configuration
+task_type: segmentation
+dataset_name: davis2017
+num_classes: 0  # Instance-level segmentation
+domain: natural
+foundation_model: sam2
+prompt_modality: point
+metric_name: "J&F"
+
+sam:
+  model_type: vit_b
+  # checkpoint: path/to/sam_vit_b.pth
+
+data:
+  image_dir: null  # Set to DAVIS JPEGImages path
+  annotation_dir: null  # Set to DAVIS Annotations path
+  split: val

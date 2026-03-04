@@ -1,0 +1,34 @@
+# VisPromptAgent default configuration
+# Override per-task settings in configs/tasks/
+
+pipeline:
+  max_iterations: 3
+  early_stop_threshold: 0.01  # Stop if improvement < 1%
+
+llm:
+  model: gpt-4o
+  provider: openai  # openai, anthropic, google
+  temperature: 0.3
+  max_tokens: 4096
+  max_retries: 3
+
+agents:
+  analyst:
+    sample_images: 5  # Images per class to examine via VLM
+    max_confusion_pairs: 15
+  planner:
+    n_prompt_levels: 3
+    ensemble_method: weighted_average
+  executor:
+    batch_size: 256
+  critic:
+    min_tests: 5
+    evolve_tests: true  # Generate new tests in later iterations
+  strategist:
+    vlm_inspection: true  # Inspect failed class images
+    max_inspected_classes: 5
+
+output:
+  save_reasoning_trace: true
+  save_per_iteration: true
+  save_prompts: true

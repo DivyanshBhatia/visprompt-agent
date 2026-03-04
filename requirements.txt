@@ -1,0 +1,28 @@
+# Core
+numpy>=1.24
+Pillow>=10.0
+pyyaml>=6.0
+tqdm>=4.65
+
+# LLM providers (install at least one)
+openai>=1.0
+# anthropic>=0.34
+# google-generativeai>=0.8
+
+# Vision models (install based on task)
+torch>=2.1
+torchvision>=0.16
+open-clip-torch>=2.24
+
+# Optional: SAM 2
+# segment-anything-2  # pip install git+https://github.com/facebookresearch/segment-anything-2.git
+
+# Optional: GroundingDINO
+# groundingdino  # pip install git+https://github.com/IDEA-Research/GroundingDINO.git
+
+# Optional: OpenCV (for segmentation image processing)
+# opencv-python>=4.8
+
+# Dev
+# pytest>=7.0
+# ruff>=0.3

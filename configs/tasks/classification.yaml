@@ -1,0 +1,21 @@
+# CIFAR-100 zero-shot classification configuration
+task_type: classification
+dataset_name: cifar100
+num_classes: 100
+image_resolution: [32, 32]
+domain: natural
+foundation_model: clip
+prompt_modality: text
+metric_name: top1_accuracy
+val_split_size: 5000
+
+# CLIP model variants to evaluate
+clip_models:
+  - ViT-B/32
+  - ViT-L/14
+
+# Known challenges at 32x32 resolution
+notes: >
+  Low resolution (32x32) means texture and color dominate over shape.
+  Background context is a strong discriminative signal for many classes.
+  Key confusion pairs include boy/girl, shrew/mouse, maple/oak trees.

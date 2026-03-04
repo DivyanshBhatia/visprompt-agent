@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "visprompt-agent"
+version = "0.1.0"
+description = "Multi-Agent Visual Prompt Engineering for Foundation Vision Models"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "pyyaml>=6.0",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+clip = ["open-clip-torch>=2.24", "torch>=2.1", "torchvision>=0.16"]
+sam = ["segment-anything-2"]
+detection = ["groundingdino"]
+anthropic = ["anthropic>=0.34"]
+google = ["google-generativeai>=0.8"]
+dev = ["pytest>=7.0", "ruff>=0.3", "mypy>=1.8"]
+all = [
+    "visprompt-agent[clip,anthropic,google,dev]",
+]
+
+[tool.setuptools.packages.find]
+include = ["visprompt*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

@@ -1,0 +1,15 @@
+# LVIS open-vocabulary detection configuration
+task_type: detection
+dataset_name: lvis
+domain: natural
+foundation_model: grounding_dino
+prompt_modality: text
+metric_name: AP_rare
+
+grounding_dino:
+  config: null  # Set to GroundingDINO config path
+  checkpoint: null  # Set to GroundingDINO checkpoint path
+
+data:
+  image_dir: null  # Set to LVIS images path
+  annotation_file: null  # Set to LVIS val annotations JSON
