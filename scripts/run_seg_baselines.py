@@ -159,6 +159,8 @@ def main():
     parser.add_argument("--llm-provider", type=str, default="openai")
     parser.add_argument("--run-ablation", action="store_true",
                         help="Also run weight ablation")
+    parser.add_argument("--ablation-only", action="store_true",
+                        help="Skip baselines, run only weight ablation")
     parser.add_argument("--output-dir", type=str, default="experiments/segmentation")
     parser.add_argument("--verbose", "-v", action="store_true")
 
@@ -196,84 +198,92 @@ def main():
 
     results = {}
 
-    # ── Baseline 1: Single class name ─────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  BASELINE 1: Class name only")
-    print(f"{'='*60}")
-    t0 = time.time()
-    prompts_simple = {"prompts_per_class": {
-        cls: {"prompts": [cls], "weights": [1.0]} for cls in fg_classes
-    }}
-    result = runner.evaluate(prompts_simple, task_spec)
-    print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
-    results["class_name_only"] = result.primary_metric
+    if not args.ablation_only:
+        # ── Baseline 1: Single class name ─────────────────────────────────
+        print(f"\n{'='*60}")
+        print(f"  BASELINE 1: Class name only")
+        print(f"{'='*60}")
+        t0 = time.time()
+        prompts_simple = {"prompts_per_class": {
+            cls: {"prompts": [cls], "weights": [1.0]} for cls in fg_classes
+        }}
+        result = runner.evaluate(prompts_simple, task_spec)
+        print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
+        results["class_name_only"] = result.primary_metric
 
-    # ── Baseline 2: "a photo of a {class}" ────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  BASELINE 2: 'a photo of a {{class}}'")
-    print(f"{'='*60}")
-    t0 = time.time()
-    prompts_photo = {"prompts_per_class": {
-        cls: {"prompts": [f"a photo of a {cls}"], "weights": [1.0]} for cls in fg_classes
-    }}
-    result = runner.evaluate(prompts_photo, task_spec)
-    print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
-    results["photo_template"] = result.primary_metric
+        # ── Baseline 2: "a photo of a {class}" ────────────────────────────
+        print(f"\n{'='*60}")
+        print(f"  BASELINE 2: 'a photo of a {{class}}'")
+        print(f"{'='*60}")
+        t0 = time.time()
+        prompts_photo = {"prompts_per_class": {
+            cls: {"prompts": [f"a photo of a {cls}"], "weights": [1.0]} for cls in fg_classes
+        }}
+        result = runner.evaluate(prompts_photo, task_spec)
+        print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
+        results["photo_template"] = result.primary_metric
 
-    # ── Baseline 3: 10-template ensemble ──────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  BASELINE 3: 10-template ensemble")
-    print(f"{'='*60}")
-    t0 = time.time()
-    prompts_tmpl = build_prompts(fg_classes, {}, 1.0, 0.0)
-    result = runner.evaluate(prompts_tmpl, task_spec)
-    print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
-    results["template_ensemble"] = result.primary_metric
+    # ── Generate descriptions (needed for baselines 4,5 and ablation) ──
+    descriptions = None
+    if not args.ablation_only or args.run_ablation or args.ablation_only:
+        print(f"\n{'='*60}")
+        print(f"  Generating LLM descriptions")
+        print(f"{'='*60}")
+        descriptions, desc_cost = generate_seg_descriptions(
+            fg_classes, args.llm, args.llm_provider
+        )
+        print(f"  Generated descriptions for {len(descriptions)} classes "
+              f"(cost: ${desc_cost.get('total_cost_usd', 0):.4f})")
 
-    # ── Baseline 4: LLM descriptions only ─────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  BASELINE 4: LLM descriptions only")
-    print(f"{'='*60}")
-    descriptions, desc_cost = generate_seg_descriptions(
-        fg_classes, args.llm, args.llm_provider
-    )
-    print(f"  Generated descriptions (cost: ${desc_cost.get('total_cost_usd', 0):.4f})")
+    if not args.ablation_only:
+        # ── Baseline 3: 10-template ensemble ──────────────────────────
+        print(f"\n{'='*60}")
+        print(f"  BASELINE 3: 10-template ensemble")
+        print(f"{'='*60}")
+        t0 = time.time()
+        prompts_tmpl = build_prompts(fg_classes, {}, 1.0, 0.0)
+        result = runner.evaluate(prompts_tmpl, task_spec)
+        print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
+        results["template_ensemble"] = result.primary_metric
 
-    t0 = time.time()
-    prompts_desc = build_prompts(fg_classes, descriptions, 0.0, 1.0)
-    result = runner.evaluate(prompts_desc, task_spec)
-    print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
-    results["llm_descriptions"] = result.primary_metric
+        # ── Baseline 4: LLM descriptions only ────────────────────────
+        print(f"\n{'='*60}")
+        print(f"  BASELINE 4: LLM descriptions only")
+        print(f"{'='*60}")
+        t0 = time.time()
+        prompts_desc = build_prompts(fg_classes, descriptions, 0.0, 1.0)
+        result = runner.evaluate(prompts_desc, task_spec)
+        print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
+        results["llm_descriptions"] = result.primary_metric
 
-    # ── Baseline 5: Templates + descriptions (equal weight) ───────────
-    print(f"\n{'='*60}")
-    print(f"  BASELINE 5: Templates + descriptions (50/50)")
-    print(f"{'='*60}")
-    t0 = time.time()
-    prompts_combo = build_prompts(fg_classes, descriptions, 0.5, 0.5)
-    result = runner.evaluate(prompts_combo, task_spec)
-    print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
-    results["combo_50_50"] = result.primary_metric
+        # ── Baseline 5: Templates + descriptions (equal weight) ──────
+        print(f"\n{'='*60}")
+        print(f"  BASELINE 5: Templates + descriptions (50/50)")
+        print(f"{'='*60}")
+        t0 = time.time()
+        prompts_combo = build_prompts(fg_classes, descriptions, 0.5, 0.5)
+        result = runner.evaluate(prompts_combo, task_spec)
+        print(f"  mIoU: {result.primary_metric:.4f} ({time.time()-t0:.0f}s)")
+        results["combo_50_50"] = result.primary_metric
 
-    # ── Summary ───────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  SEGMENTATION BASELINE COMPARISON (Pascal VOC 2012)")
-    print(f"{'='*60}")
-    print(f"{'Method':<30} {'mIoU':>10}")
-    print(f"{'-'*45}")
-    for name, miou in sorted(results.items(), key=lambda x: x[1]):
-        print(f"  {name:<28} {miou:>10.4f}")
-    print(f"{'='*60}")
+        # ── Summary ──────────────────────────────────────────────────
+        print(f"\n{'='*60}")
+        print(f"  SEGMENTATION BASELINE COMPARISON (Pascal VOC 2012)")
+        print(f"{'='*60}")
+        print(f"{'Method':<30} {'mIoU':>10}")
+        print(f"{'-'*45}")
+        for name, miou in sorted(results.items(), key=lambda x: x[1]):
+            print(f"  {name:<28} {miou:>10.4f}")
+        print(f"{'='*60}")
 
-    # ── Optional: Weight ablation ─────────────────────────────────────
-    if args.run_ablation:
+    # ── Weight ablation ───────────────────────────────────────────────
+    if args.run_ablation or args.ablation_only:
         print(f"\n{'='*60}")
         print(f"  WEIGHT ABLATION")
         print(f"{'='*60}")
-        print(f"{'Config':<30} {'mIoU':>10} {'Δ vs templates':>15}")
-        print(f"{'-'*60}")
+        print(f"{'Config':<30} {'mIoU':>10}")
+        print(f"{'-'*45}")
 
-        baseline_miou = results["template_ensemble"]
         ablation_results = []
 
         for base_w, desc_w, label in [
@@ -284,16 +294,18 @@ def main():
             (0.3, 0.7, "30/70"),
             (0.0, 1.0, "0/100 (descriptions only)"),
         ]:
+            t0 = time.time()
             prompts = build_prompts(fg_classes, descriptions, base_w, desc_w)
             result = runner.evaluate(prompts, task_spec)
             miou = result.primary_metric
-            delta = miou - baseline_miou
-            print(f"  {label:<28} {miou:>10.4f} {delta:>+14.4f}")
+            print(f"  {label:<28} {miou:>10.4f}  ({time.time()-t0:.0f}s)")
             ablation_results.append({
                 "base_weight": base_w, "desc_weight": desc_w,
                 "label": label, "mIoU": miou,
             })
 
+        best = max(ablation_results, key=lambda x: x["mIoU"])
+        print(f"\n  Best: {best['label']} → {best['mIoU']:.4f}")
         results["ablation"] = ablation_results
 
     # Save
