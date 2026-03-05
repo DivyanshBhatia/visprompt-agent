@@ -39,6 +39,10 @@ def build_task_spec(args) -> TaskSpec:
         return _build_dtd_spec(args)
     elif args.dataset == "eurosat":
         return _build_eurosat_spec(args)
+    elif args.dataset == "food101":
+        return _build_food101_spec(args)
+    elif args.dataset == "stanford_cars":
+        return _build_stanford_cars_spec(args)
     elif args.dataset == "davis2017":
         return _build_davis2017_spec(args)
     elif args.dataset == "lvis":
@@ -48,7 +52,7 @@ def build_task_spec(args) -> TaskSpec:
     else:
         raise ValueError(
             f"Unknown dataset: {args.dataset}. "
-            "Supported: cifar100, flowers102, dtd, eurosat. "
+            "Supported: cifar100, flowers102, dtd, eurosat, food101, stanford_cars. "
             "Or use --config for custom datasets."
         )
 
@@ -112,6 +116,30 @@ def build_task_runner(args, task_spec: TaskSpec):
             images, labels = _load_pil_dataset(
                 "EuroSAT", args, split=None,
                 dataset_kwargs={},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "food101":
+            images, labels = _load_pil_dataset(
+                "Food101", args, split="test",
+                dataset_kwargs={"split": "test"},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "stanford_cars":
+            images, labels = _load_pil_dataset(
+                "StanfordCars", args, split="test",
+                dataset_kwargs={"split": "test"},
             )
             runner = CLIPClassificationRunner(
                 clip_model_name=args.clip_model or "ViT-L/14",
@@ -364,6 +392,67 @@ def _build_eurosat_spec(args) -> TaskSpec:
         prompt_modality="text",
         metric_name="top1_accuracy",
         val_split_size=args.val_size or 5000,
+    )
+
+
+def _build_food101_spec(args) -> TaskSpec:
+    """Build Food101 task specification."""
+    import torchvision
+    dataset = torchvision.datasets.Food101(
+        root=args.data_dir or "./data", split="test", download=True
+    )
+    # Food101 has .classes — folder names with underscores
+    class_names = [c.replace("_", " ") for c in dataset.classes]
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="food101",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,  # Variable size
+        domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 10000,
+    )
+
+
+def _build_stanford_cars_spec(args) -> TaskSpec:
+    """Build StanfordCars task specification."""
+    import torchvision
+    try:
+        dataset = torchvision.datasets.StanfordCars(
+            root=args.data_dir or "./data", split="test", download=True
+        )
+        class_names = list(dataset.classes)
+    except Exception as e:
+        logging.warning(f"StanfordCars auto-download failed: {e}")
+        logging.warning("Trying without download — ensure data is in ./data/stanford_cars/")
+        try:
+            dataset = torchvision.datasets.StanfordCars(
+                root=args.data_dir or "./data", split="test", download=False
+            )
+            class_names = list(dataset.classes)
+        except Exception:
+            raise RuntimeError(
+                "StanfordCars dataset not available. Download manually from "
+                "https://ai.stanford.edu/~jkrause/cars/car_dataset.html "
+                "and place in ./data/stanford_cars/"
+            )
+
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="stanford_cars",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,  # Variable size
+        domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 8041,
     )
 
 

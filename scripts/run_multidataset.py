@@ -23,6 +23,8 @@ DATASET_CONFIGS = {
     "flowers102": {"val_size": 6149, "domain": "fine-grained flowers"},
     "dtd": {"val_size": 1880, "domain": "textures"},
     "eurosat": {"val_size": 5000, "domain": "satellite imagery"},
+    "food101": {"val_size": 10000, "domain": "food categories"},
+    "stanford_cars": {"val_size": 8041, "domain": "fine-grained cars"},
 }
 
 
@@ -39,7 +41,7 @@ def run_command(cmd, description):
 def main():
     parser = argparse.ArgumentParser(description="Multi-dataset benchmark")
     parser.add_argument("--datasets", nargs="+",
-                        default=["cifar100", "flowers102", "dtd", "eurosat"],
+                        default=["cifar100", "flowers102", "dtd", "eurosat", "food101", "stanford_cars"],
                         choices=list(DATASET_CONFIGS.keys()))
     parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--device", type=str, default="cuda")
