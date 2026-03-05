@@ -41,8 +41,10 @@ def build_task_spec(args) -> TaskSpec:
         return _build_eurosat_spec(args)
     elif args.dataset == "food101":
         return _build_food101_spec(args)
-    elif args.dataset == "stanford_cars":
-        return _build_stanford_cars_spec(args)
+    elif args.dataset == "cifar10":
+        return _build_cifar10_spec(args)
+    elif args.dataset == "fgvc_aircraft":
+        return _build_fgvc_aircraft_spec(args)
     elif args.dataset == "davis2017":
         return _build_davis2017_spec(args)
     elif args.dataset == "lvis":
@@ -52,7 +54,7 @@ def build_task_spec(args) -> TaskSpec:
     else:
         raise ValueError(
             f"Unknown dataset: {args.dataset}. "
-            "Supported: cifar100, flowers102, dtd, eurosat, food101, stanford_cars. "
+            "Supported: cifar100, cifar10, flowers102, dtd, eurosat, food101, fgvc_aircraft. "
             "Or use --config for custom datasets."
         )
 
@@ -136,9 +138,30 @@ def build_task_runner(args, task_spec: TaskSpec):
                 labels=labels,
             )
 
-        elif args.dataset == "stanford_cars":
+        elif args.dataset == "cifar10":
+            import torchvision
+            import numpy as np
+
+            dataset = torchvision.datasets.CIFAR10(
+                root=args.data_dir or "./data",
+                train=False,
+                download=True,
+            )
+            n_val = min(args.val_size or 10000, len(dataset))
+            indices = np.random.RandomState(42).permutation(len(dataset))[:n_val]
+            images = np.array(dataset.data)[indices]
+            labels = np.array(dataset.targets)[indices]
+
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "fgvc_aircraft":
             images, labels = _load_pil_dataset(
-                "StanfordCars", args, split="test",
+                "FGVCAircraft", args, split="test",
                 dataset_kwargs={"split": "test"},
             )
             runner = CLIPClassificationRunner(
@@ -418,32 +441,42 @@ def _build_food101_spec(args) -> TaskSpec:
     )
 
 
-def _build_stanford_cars_spec(args) -> TaskSpec:
-    """Build StanfordCars task specification."""
+def _build_cifar10_spec(args) -> TaskSpec:
+    """Build CIFAR-10 task specification."""
     import torchvision
-    try:
-        dataset = torchvision.datasets.StanfordCars(
-            root=args.data_dir or "./data", split="test", download=True
-        )
-        class_names = list(dataset.classes)
-    except Exception as e:
-        logging.warning(f"StanfordCars auto-download failed: {e}")
-        logging.warning("Trying without download — ensure data is in ./data/stanford_cars/")
-        try:
-            dataset = torchvision.datasets.StanfordCars(
-                root=args.data_dir or "./data", split="test", download=False
-            )
-            class_names = list(dataset.classes)
-        except Exception:
-            raise RuntimeError(
-                "StanfordCars dataset not available. Download manually from "
-                "https://ai.stanford.edu/~jkrause/cars/car_dataset.html "
-                "and place in ./data/stanford_cars/"
-            )
-
+    dataset = torchvision.datasets.CIFAR10(
+        root=args.data_dir or "./data", train=False, download=True
+    )
+    class_names = list(dataset.classes)
     return TaskSpec(
         task_type="classification",
-        dataset_name="stanford_cars",
+        dataset_name="cifar10",
+        class_names=class_names,
+        num_classes=10,
+        class_hierarchy=None,
+        image_resolution=(32, 32),
+        domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 10000,
+    )
+
+
+def _build_fgvc_aircraft_spec(args) -> TaskSpec:
+    """Build FGVC-Aircraft task specification."""
+    import torchvision
+    dataset = torchvision.datasets.FGVCAircraft(
+        root=args.data_dir or "./data", split="test", download=True
+    )
+    # FGVCAircraft has .classes
+    class_names = list(dataset.classes) if hasattr(dataset, 'classes') else []
+    if not class_names:
+        # Fallback: extract from dataset
+        class_names = sorted(set(dataset._labels))
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="fgvc_aircraft",
         class_names=class_names,
         num_classes=len(class_names),
         class_hierarchy=None,
@@ -452,7 +485,7 @@ def _build_stanford_cars_spec(args) -> TaskSpec:
         foundation_model="clip",
         prompt_modality="text",
         metric_name="top1_accuracy",
-        val_split_size=args.val_size or 8041,
+        val_split_size=args.val_size or 3333,
     )
 
 
