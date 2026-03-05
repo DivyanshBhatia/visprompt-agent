@@ -168,6 +168,8 @@ class OWLViTDetectionRunner(BaseTaskRunner):
                     text=[text_queries],
                     images=image,
                     return_tensors="pt",
+                    padding=True,
+                    truncation=True,
                 ).to(self.device)
 
                 with torch.no_grad():
