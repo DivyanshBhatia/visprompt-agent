@@ -45,6 +45,8 @@ def build_task_spec(args) -> TaskSpec:
         return _build_cifar10_spec(args)
     elif args.dataset == "fgvc_aircraft":
         return _build_fgvc_aircraft_spec(args)
+    elif args.dataset == "coco":
+        return _build_coco_spec(args)
     elif args.dataset == "davis2017":
         return _build_davis2017_spec(args)
     elif args.dataset == "lvis":
@@ -191,15 +193,28 @@ def build_task_runner(args, task_spec: TaskSpec):
         )
 
     elif task_spec.task_type == "detection":
-        from visprompt.tasks.detection import GroundingDINODetectionRunner
+        det_model = getattr(args, 'det_model', 'owlvit')
 
-        return GroundingDINODetectionRunner(
-            model_config=args.gdino_config,
-            checkpoint=args.gdino_checkpoint,
-            device=device,
-            image_dir=args.data_dir,
-            annotation_file=args.annotation_file,
-        )
+        if det_model == "owlvit":
+            from visprompt.tasks.detection_owlvit import OWLViTDetectionRunner
+
+            return OWLViTDetectionRunner(
+                model_name=getattr(args, 'owlvit_model', "google/owlv2-base-patch16-ensemble"),
+                device=device,
+                image_dir=args.data_dir,
+                annotation_file=args.annotation_file,
+                max_images=getattr(args, 'max_det_images', None),
+            )
+        else:
+            from visprompt.tasks.detection import GroundingDINODetectionRunner
+
+            return GroundingDINODetectionRunner(
+                model_config=args.gdino_config,
+                checkpoint=args.gdino_checkpoint,
+                device=device,
+                image_dir=args.data_dir,
+                annotation_file=args.annotation_file,
+            )
 
     else:
         raise ValueError(f"Unknown task type: {task_spec.task_type}")
@@ -489,6 +504,52 @@ def _build_fgvc_aircraft_spec(args) -> TaskSpec:
     )
 
 
+COCO_CLASSES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep",
+    "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
+    "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
+    "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
+    "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
+    "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    "couch", "potted plant", "bed", "dining table", "toilet", "tv",
+    "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
+    "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
+    "scissors", "teddy bear", "hair drier", "toothbrush",
+]
+
+
+def _build_coco_spec(args) -> TaskSpec:
+    """Build COCO detection task specification."""
+    # Try loading class names from annotation file
+    class_names = COCO_CLASSES
+    if args.annotation_file:
+        try:
+            import json
+            with open(args.annotation_file) as f:
+                coco = json.load(f)
+            cats = sorted(coco.get("categories", []), key=lambda c: c["id"])
+            class_names = [c["name"] for c in cats]
+        except Exception as e:
+            logging.warning(f"Could not load COCO categories from annotation file: {e}")
+
+    return TaskSpec(
+        task_type="detection",
+        dataset_name="coco",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,
+        domain="natural",
+        foundation_model="owlvit",
+        prompt_modality="text",
+        metric_name="mAP",
+        val_split_size=args.val_size,
+    )
+
+
 def _build_davis2017_spec(args) -> TaskSpec:
     return TaskSpec(
         task_type="segmentation",
@@ -565,6 +626,12 @@ def main():
     parser.add_argument("--sam-model-type", type=str, default="vit_b")
     parser.add_argument("--gdino-config", type=str)
     parser.add_argument("--gdino-checkpoint", type=str)
+    parser.add_argument("--det-model", type=str, default="owlvit",
+                        choices=["owlvit", "gdino"], help="Detection model")
+    parser.add_argument("--owlvit-model", type=str,
+                        default="google/owlv2-base-patch16-ensemble")
+    parser.add_argument("--max-det-images", type=int, default=None,
+                        help="Max images for detection eval (None=all)")
     parser.add_argument("--device", type=str, default="cuda")
 
     # LLM
