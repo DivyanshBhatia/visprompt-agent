@@ -173,53 +173,32 @@ class OWLViTDetectionRunner(BaseTaskRunner):
                 with torch.no_grad():
                     outputs = self._model(**inputs)
 
-                # Post-process: manual extraction (works across all transformers versions)
-                target_sizes = torch.tensor([[h, w]], device=self.device)
+                # Manual post-processing (no API dependency, works with any transformers version)
+                logits = outputs.logits[0]  # (num_queries, num_classes)
+                boxes = outputs.pred_boxes[0]  # (num_queries, 4)
 
-                # Try built-in post-processing first
-                post_processed = False
-                for obj in [
-                    getattr(self._processor, 'image_processor', None),
-                    self._processor,
-                    self._model,
-                ]:
-                    if obj is not None and hasattr(obj, 'post_process_object_detection'):
-                        try:
-                            results = obj.post_process_object_detection(
-                                outputs, threshold=conf_threshold, target_sizes=target_sizes
-                            )[0]
-                            post_processed = True
-                            break
-                        except Exception:
-                            continue
+                # Get max class score per query
+                probs = logits.sigmoid()
+                scores, labels = probs.max(dim=-1)
+                mask = scores > conf_threshold
 
-                if not post_processed:
-                    # Manual post-processing (guaranteed to work)
-                    logits = outputs.logits[0]  # (num_queries, num_classes)
-                    boxes = outputs.pred_boxes[0]  # (num_queries, 4)
+                # Convert normalized cx,cy,w,h -> pixel x1,y1,x2,y2
+                filtered_boxes = boxes[mask]
+                if len(filtered_boxes) > 0:
+                    cx, cy, bw, bh = filtered_boxes.unbind(-1)
+                    x1 = (cx - bw / 2) * w
+                    y1 = (cy - bh / 2) * h
+                    x2 = (cx + bw / 2) * w
+                    y2 = (cy + bh / 2) * h
+                    converted_boxes = torch.stack([x1, y1, x2, y2], dim=-1)
+                else:
+                    converted_boxes = torch.zeros((0, 4), device=self.device)
 
-                    # Get max class score per query
-                    probs = logits.sigmoid()
-                    scores, labels = probs.max(dim=-1)
-                    mask = scores > conf_threshold
-
-                    # Convert normalized cx,cy,w,h -> pixel x1,y1,x2,y2
-                    filtered_boxes = boxes[mask]
-                    if len(filtered_boxes) > 0:
-                        cx, cy, bw, bh = filtered_boxes.unbind(-1)
-                        x1 = (cx - bw / 2) * w
-                        y1 = (cy - bh / 2) * h
-                        x2 = (cx + bw / 2) * w
-                        y2 = (cy + bh / 2) * h
-                        converted_boxes = torch.stack([x1, y1, x2, y2], dim=-1)
-                    else:
-                        converted_boxes = torch.zeros((0, 4), device=self.device)
-
-                    results = {
-                        "boxes": converted_boxes,
-                        "scores": scores[mask],
-                        "labels": labels[mask],
-                    }
+                results = {
+                    "boxes": converted_boxes,
+                    "scores": scores[mask],
+                    "labels": labels[mask],
+                }
 
                 pred_boxes = []
                 for box, score, label in zip(
