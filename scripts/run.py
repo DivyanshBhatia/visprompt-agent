@@ -33,6 +33,12 @@ def build_task_spec(args) -> TaskSpec:
     """Build TaskSpec from command-line arguments."""
     if args.dataset == "cifar100":
         return _build_cifar100_spec(args)
+    elif args.dataset == "flowers102":
+        return _build_flowers102_spec(args)
+    elif args.dataset == "dtd":
+        return _build_dtd_spec(args)
+    elif args.dataset == "eurosat":
+        return _build_eurosat_spec(args)
     elif args.dataset == "davis2017":
         return _build_davis2017_spec(args)
     elif args.dataset == "lvis":
@@ -42,7 +48,8 @@ def build_task_spec(args) -> TaskSpec:
     else:
         raise ValueError(
             f"Unknown dataset: {args.dataset}. "
-            "Use --config for custom datasets."
+            "Supported: cifar100, flowers102, dtd, eurosat. "
+            "Or use --config for custom datasets."
         )
 
 
@@ -76,6 +83,43 @@ def build_task_runner(args, task_spec: TaskSpec):
                 images=images,
                 labels=labels,
             )
+
+        elif args.dataset == "flowers102":
+            images, labels = _load_pil_dataset(
+                "Flowers102", args, split="test",
+                dataset_kwargs={"split": "test"},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "dtd":
+            images, labels = _load_pil_dataset(
+                "DTD", args, split="test",
+                dataset_kwargs={"split": "test"},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "eurosat":
+            images, labels = _load_pil_dataset(
+                "EuroSAT", args, split=None,
+                dataset_kwargs={},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
         else:
             runner = CLIPClassificationRunner(
                 clip_model_name=args.clip_model or "ViT-L/14",
@@ -141,6 +185,181 @@ def _build_cifar100_spec(args) -> TaskSpec:
         class_hierarchy=hierarchy if any(hierarchy.values()) else None,
         image_resolution=(32, 32),
         domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 5000,
+    )
+
+
+def _load_pil_dataset(dataset_name, args, split=None, dataset_kwargs=None):
+    """Load a torchvision dataset that returns PIL images into numpy arrays.
+
+    Works for Flowers102, DTD, EuroSAT, and similar datasets.
+    Returns (images_array, labels_array) with optional subsampling.
+    """
+    import numpy as np
+    import torchvision
+
+    dataset_cls = getattr(torchvision.datasets, dataset_name)
+    dataset = dataset_cls(
+        root=args.data_dir or "./data",
+        download=True,
+        **(dataset_kwargs or {}),
+    )
+
+    n_total = len(dataset)
+    n_val = min(args.val_size or n_total, n_total)
+    indices = np.random.RandomState(42).permutation(n_total)[:n_val]
+
+    logging.info(f"Loading {dataset_name}: {n_val}/{n_total} images...")
+
+    images = []
+    labels = []
+    for idx in indices:
+        img, label = dataset[idx]
+        # Convert PIL to numpy RGB array
+        img_np = np.array(img.convert("RGB"))
+        images.append(img_np)
+        labels.append(label)
+
+    # For variable-size images, store as object array
+    # For fixed-size, store as regular array
+    try:
+        images_arr = np.stack(images)
+    except ValueError:
+        # Variable image sizes — store as object array
+        images_arr = np.empty(len(images), dtype=object)
+        for i, img in enumerate(images):
+            images_arr[i] = img
+
+    labels_arr = np.array(labels)
+    logging.info(f"Loaded {dataset_name}: {len(images_arr)} images, "
+                 f"{len(np.unique(labels_arr))} classes")
+    return images_arr, labels_arr
+
+
+# ── Flowers102 class names (Oxford 102 Flowers) ──────────────────────────
+FLOWERS102_CLASSES = [
+    "pink primrose", "hard-leaved pocket orchid", "canterbury bells",
+    "sweet pea", "english marigold", "tiger lily", "moon orchid",
+    "bird of paradise", "monkshood", "globe thistle", "snapdragon",
+    "colt's foot", "king protea", "spear thistle", "yellow iris",
+    "globe-flower", "purple coneflower", "peruvian lily", "balloon flower",
+    "giant white arum lily", "fire lily", "pincushion flower", "fritillary",
+    "red ginger", "grape hyacinth", "corn poppy", "prince of wales feathers",
+    "stemless gentian", "artichoke", "sweet william", "carnation",
+    "garden phlox", "love in the mist", "mexican aster", "alpine sea holly",
+    "ruby-lipped cattleya", "cape flower", "great masterwort", "siam tulip",
+    "lenten rose", "barbeton daisy", "daffodil", "sword lily", "poinsettia",
+    "bolero deep blue", "wallflower", "marigold", "buttercup", "oxeye daisy",
+    "common dandelion", "petunia", "wild pansy", "primula", "sunflower",
+    "pelargonium", "bishop of llandaff", "gaura", "geranium", "orange dahlia",
+    "pink-yellow dahlia", "cautleya spicata", "japanese anemone",
+    "black-eyed susan", "silverbush", "californian poppy", "osteospermum",
+    "spring crocus", "bearded iris", "windflower", "tree poppy", "gazania",
+    "azalea", "water lily", "rose", "thorn apple", "morning glory",
+    "passion flower", "lotus", "toad lily", "anthurium", "frangipani",
+    "clematis", "hibiscus", "columbine", "desert-rose", "tree mallow",
+    "magnolia", "cyclamen", "watercress", "canna lily", "hippeastrum",
+    "bee balm", "ball moss", "foxglove", "bougainvillea", "camellia",
+    "mallow", "mexican petunia", "bromelia", "blanket flower",
+    "trumpet creeper", "blackberry lily",
+]
+
+DTD_CLASSES = [
+    "banded", "blotchy", "braided", "bubbly", "bumpy", "chequered",
+    "cobwebbed", "cracked", "crosshatched", "crystalline", "dotted",
+    "fibrous", "flecked", "freckled", "frilly", "gauzy", "grid",
+    "grooved", "honeycombed", "interlaced", "knitted", "lacelike",
+    "lined", "marbled", "matted", "meshed", "paisley", "perforated",
+    "pitted", "pleated", "polka-dotted", "porous", "potholed", "scaly",
+    "smeared", "spiralled", "sprinkled", "stained", "stratified",
+    "striped", "studded", "swirly", "veined", "waffled", "woven",
+    "wrinkled", "zigzagged",
+]
+
+EUROSAT_CLASSES = [
+    "annual crop land", "forest", "herbaceous vegetation land",
+    "highway", "industrial buildings", "pasture", "permanent crop land",
+    "residential buildings", "river", "sea or lake",
+]
+
+
+def _build_flowers102_spec(args) -> TaskSpec:
+    """Build Flowers102 task specification."""
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="flowers102",
+        class_names=FLOWERS102_CLASSES,
+        num_classes=102,
+        class_hierarchy=None,
+        image_resolution=None,  # Variable size
+        domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 6149,
+    )
+
+
+def _build_dtd_spec(args) -> TaskSpec:
+    """Build DTD (Describable Textures Dataset) task specification."""
+    import torchvision
+    dataset = torchvision.datasets.DTD(
+        root=args.data_dir or "./data", split="test", download=True
+    )
+    # DTD exposes .classes
+    class_names = dataset.classes if hasattr(dataset, 'classes') else DTD_CLASSES
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="dtd",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,  # Variable size
+        domain="textures",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 1880,
+    )
+
+
+def _build_eurosat_spec(args) -> TaskSpec:
+    """Build EuroSAT task specification."""
+    import torchvision
+    try:
+        dataset = torchvision.datasets.EuroSAT(
+            root=args.data_dir or "./data", download=True
+        )
+        # EuroSAT is an ImageFolder, has .classes
+        class_names = dataset.classes if hasattr(dataset, 'classes') else EUROSAT_CLASSES
+        # Clean up folder names to readable names
+        eurosat_name_map = {
+            "AnnualCrop": "annual crop land",
+            "Forest": "forest",
+            "HerbaceousVegetation": "herbaceous vegetation land",
+            "Highway": "highway",
+            "Industrial": "industrial buildings",
+            "Pasture": "pasture",
+            "PermanentCrop": "permanent crop land",
+            "Residential": "residential buildings",
+            "River": "river",
+            "SeaLake": "sea or lake",
+        }
+        class_names = [eurosat_name_map.get(c, c) for c in class_names]
+    except Exception:
+        class_names = EUROSAT_CLASSES
+
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="eurosat",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=(64, 64),
+        domain="remote_sensing",
         foundation_model="clip",
         prompt_modality="text",
         metric_name="top1_accuracy",
