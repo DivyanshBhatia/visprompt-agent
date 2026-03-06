@@ -45,6 +45,14 @@ def build_task_spec(args) -> TaskSpec:
         return _build_cifar10_spec(args)
     elif args.dataset == "fgvc_aircraft":
         return _build_fgvc_aircraft_spec(args)
+    elif args.dataset == "oxford_pets":
+        return _build_oxford_pets_spec(args)
+    elif args.dataset == "caltech101":
+        return _build_caltech101_spec(args)
+    elif args.dataset == "sun397":
+        return _build_sun397_spec(args)
+    elif args.dataset == "country211":
+        return _build_country211_spec(args)
     elif args.dataset == "coco":
         return _build_coco_spec(args)
     elif args.dataset == "davis2017":
@@ -56,7 +64,8 @@ def build_task_spec(args) -> TaskSpec:
     else:
         raise ValueError(
             f"Unknown dataset: {args.dataset}. "
-            "Supported: cifar100, cifar10, flowers102, dtd, eurosat, food101, fgvc_aircraft. "
+            "Supported: cifar10, cifar100, flowers102, dtd, eurosat, food101, "
+            "fgvc_aircraft, oxford_pets, caltech101, sun397, country211. "
             "Or use --config for custom datasets."
         )
 
@@ -164,6 +173,54 @@ def build_task_runner(args, task_spec: TaskSpec):
         elif args.dataset == "fgvc_aircraft":
             images, labels = _load_pil_dataset(
                 "FGVCAircraft", args, split="test",
+                dataset_kwargs={"split": "test"},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "oxford_pets":
+            images, labels = _load_pil_dataset(
+                "OxfordIIITPet", args, split="test",
+                dataset_kwargs={"split": "test"},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "caltech101":
+            images, labels = _load_pil_dataset(
+                "Caltech101", args, split=None,
+                dataset_kwargs={},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "sun397":
+            images, labels = _load_pil_dataset(
+                "SUN397", args, split=None,
+                dataset_kwargs={},
+            )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "country211":
+            images, labels = _load_pil_dataset(
+                "Country211", args, split="test",
                 dataset_kwargs={"split": "test"},
             )
             runner = CLIPClassificationRunner(
@@ -501,6 +558,108 @@ def _build_fgvc_aircraft_spec(args) -> TaskSpec:
         prompt_modality="text",
         metric_name="top1_accuracy",
         val_split_size=args.val_size or 3333,
+    )
+
+
+def _build_oxford_pets_spec(args) -> TaskSpec:
+    """Build Oxford-IIIT Pets task specification."""
+    import torchvision
+    dataset = torchvision.datasets.OxfordIIITPet(
+        root=args.data_dir or "./data", split="test", download=True
+    )
+    class_names = list(dataset.classes) if hasattr(dataset, 'classes') else []
+    if not class_names:
+        # Fallback: known 37 breeds
+        class_names = sorted(set(dataset._labels)) if hasattr(dataset, '_labels') else []
+    # Clean names: "Abyssinian" -> "abyssinian"
+    class_names = [c.replace("_", " ") for c in class_names]
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="oxford_pets",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,
+        domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 3669,
+    )
+
+
+def _build_caltech101_spec(args) -> TaskSpec:
+    """Build Caltech-101 task specification."""
+    import torchvision
+    dataset = torchvision.datasets.Caltech101(
+        root=args.data_dir or "./data", download=True
+    )
+    class_names = list(dataset.categories)
+    # Clean names
+    class_names = [c.replace("_", " ") for c in class_names]
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="caltech101",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,
+        domain="natural",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 6084,
+    )
+
+
+def _build_sun397_spec(args) -> TaskSpec:
+    """Build SUN397 task specification."""
+    import torchvision
+    dataset = torchvision.datasets.SUN397(
+        root=args.data_dir or "./data", download=True
+    )
+    # SUN397 class names are paths like "/a/abbey" — clean them
+    if hasattr(dataset, 'classes'):
+        class_names = [c.split("/")[-1].replace("_", " ") for c in dataset.classes]
+    else:
+        class_names = [f"scene_{i}" for i in range(397)]
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="sun397",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,
+        domain="scenes",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 10000,
+    )
+
+
+def _build_country211_spec(args) -> TaskSpec:
+    """Build Country211 task specification."""
+    import torchvision
+    dataset = torchvision.datasets.Country211(
+        root=args.data_dir or "./data", split="test", download=True
+    )
+    class_names = list(dataset.classes) if hasattr(dataset, 'classes') else []
+    if not class_names:
+        class_names = [f"country_{i}" for i in range(211)]
+    class_names = [c.replace("_", " ") for c in class_names]
+    return TaskSpec(
+        task_type="classification",
+        dataset_name="country211",
+        class_names=class_names,
+        num_classes=len(class_names),
+        class_hierarchy=None,
+        image_resolution=None,
+        domain="geolocation",
+        foundation_model="clip",
+        prompt_modality="text",
+        metric_name="top1_accuracy",
+        val_split_size=args.val_size or 10000,
     )
 
 

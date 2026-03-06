@@ -26,6 +26,10 @@ DATASET_CONFIGS = {
     "eurosat": {"val_size": 5000, "domain": "satellite imagery"},
     "food101": {"val_size": 10000, "domain": "food categories"},
     "fgvc_aircraft": {"val_size": 3333, "domain": "fine-grained aircraft"},
+    "oxford_pets": {"val_size": 3669, "domain": "fine-grained pet breeds"},
+    "caltech101": {"val_size": 6084, "domain": "101 object categories"},
+    "sun397": {"val_size": 10000, "domain": "397 scene categories"},
+    "country211": {"val_size": 10000, "domain": "211 country geolocation"},
 }
 
 
@@ -42,7 +46,7 @@ def run_command(cmd, description):
 def main():
     parser = argparse.ArgumentParser(description="Multi-dataset benchmark")
     parser.add_argument("--datasets", nargs="+",
-                        default=["cifar10", "cifar100", "flowers102", "dtd", "eurosat", "food101", "fgvc_aircraft"],
+                        default=list(DATASET_CONFIGS.keys()),
                         choices=list(DATASET_CONFIGS.keys()))
     parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--device", type=str, default="cuda")
