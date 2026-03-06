@@ -638,16 +638,75 @@ def _build_sun397_spec(args) -> TaskSpec:
     )
 
 
+ISO_TO_COUNTRY = {
+    "AD": "Andorra", "AE": "United Arab Emirates", "AF": "Afghanistan",
+    "AG": "Antigua and Barbuda", "AI": "Anguilla", "AL": "Albania",
+    "AM": "Armenia", "AO": "Angola", "AR": "Argentina", "AT": "Austria",
+    "AU": "Australia", "AW": "Aruba", "AZ": "Azerbaijan", "BA": "Bosnia and Herzegovina",
+    "BB": "Barbados", "BD": "Bangladesh", "BE": "Belgium", "BF": "Burkina Faso",
+    "BG": "Bulgaria", "BH": "Bahrain", "BJ": "Benin", "BM": "Bermuda",
+    "BN": "Brunei", "BO": "Bolivia", "BR": "Brazil", "BS": "Bahamas",
+    "BT": "Bhutan", "BW": "Botswana", "BY": "Belarus", "BZ": "Belize",
+    "CA": "Canada", "CD": "Democratic Republic of the Congo", "CF": "Central African Republic",
+    "CH": "Switzerland", "CI": "Ivory Coast", "CL": "Chile", "CM": "Cameroon",
+    "CN": "China", "CO": "Colombia", "CR": "Costa Rica", "CU": "Cuba",
+    "CW": "Curacao", "CY": "Cyprus", "CZ": "Czech Republic", "DE": "Germany",
+    "DK": "Denmark", "DM": "Dominica", "DO": "Dominican Republic", "DZ": "Algeria",
+    "EC": "Ecuador", "EE": "Estonia", "EG": "Egypt", "ES": "Spain",
+    "ET": "Ethiopia", "FI": "Finland", "FJ": "Fiji", "FK": "Falkland Islands",
+    "FO": "Faroe Islands", "FR": "France", "GA": "Gabon", "GB": "United Kingdom",
+    "GD": "Grenada", "GE": "Georgia", "GF": "French Guiana", "GG": "Guernsey",
+    "GH": "Ghana", "GI": "Gibraltar", "GL": "Greenland", "GM": "Gambia",
+    "GP": "Guadeloupe", "GR": "Greece", "GT": "Guatemala", "GU": "Guam",
+    "GY": "Guyana", "HK": "Hong Kong", "HN": "Honduras", "HR": "Croatia",
+    "HT": "Haiti", "HU": "Hungary", "ID": "Indonesia", "IE": "Ireland",
+    "IL": "Israel", "IM": "Isle of Man", "IN": "India", "IQ": "Iraq",
+    "IR": "Iran", "IS": "Iceland", "IT": "Italy", "JE": "Jersey",
+    "JM": "Jamaica", "JO": "Jordan", "JP": "Japan", "KE": "Kenya",
+    "KG": "Kyrgyzstan", "KH": "Cambodia", "KN": "Saint Kitts and Nevis",
+    "KR": "South Korea", "KW": "Kuwait", "KY": "Cayman Islands", "KZ": "Kazakhstan",
+    "LA": "Laos", "LB": "Lebanon", "LC": "Saint Lucia", "LI": "Liechtenstein",
+    "LK": "Sri Lanka", "LR": "Liberia", "LS": "Lesotho", "LT": "Lithuania",
+    "LU": "Luxembourg", "LV": "Latvia", "LY": "Libya", "MA": "Morocco",
+    "MC": "Monaco", "MD": "Moldova", "ME": "Montenegro", "MF": "Saint Martin",
+    "MG": "Madagascar", "MK": "North Macedonia", "ML": "Mali", "MM": "Myanmar",
+    "MN": "Mongolia", "MO": "Macau", "MQ": "Martinique", "MR": "Mauritania",
+    "MT": "Malta", "MU": "Mauritius", "MV": "Maldives", "MW": "Malawi",
+    "MX": "Mexico", "MY": "Malaysia", "MZ": "Mozambique", "NA": "Namibia",
+    "NC": "New Caledonia", "NE": "Niger", "NG": "Nigeria", "NI": "Nicaragua",
+    "NL": "Netherlands", "NO": "Norway", "NP": "Nepal", "NZ": "New Zealand",
+    "OM": "Oman", "PA": "Panama", "PE": "Peru", "PF": "French Polynesia",
+    "PG": "Papua New Guinea", "PH": "Philippines", "PK": "Pakistan", "PL": "Poland",
+    "PR": "Puerto Rico", "PS": "Palestine", "PT": "Portugal", "PW": "Palau",
+    "PY": "Paraguay", "QA": "Qatar", "RE": "Reunion", "RO": "Romania",
+    "RS": "Serbia", "RU": "Russia", "RW": "Rwanda", "SA": "Saudi Arabia",
+    "SC": "Seychelles", "SD": "Sudan", "SE": "Sweden", "SG": "Singapore",
+    "SI": "Slovenia", "SK": "Slovakia", "SL": "Sierra Leone", "SM": "San Marino",
+    "SN": "Senegal", "SO": "Somalia", "SR": "Suriname", "SV": "El Salvador",
+    "SX": "Sint Maarten", "SY": "Syria", "SZ": "Eswatini", "TC": "Turks and Caicos Islands",
+    "TG": "Togo", "TH": "Thailand", "TJ": "Tajikistan", "TL": "East Timor",
+    "TN": "Tunisia", "TO": "Tonga", "TR": "Turkey", "TT": "Trinidad and Tobago",
+    "TW": "Taiwan", "TZ": "Tanzania", "UA": "Ukraine", "UG": "Uganda",
+    "US": "United States", "UY": "Uruguay", "UZ": "Uzbekistan",
+    "VC": "Saint Vincent and the Grenadines", "VE": "Venezuela", "VG": "British Virgin Islands",
+    "VI": "US Virgin Islands", "VN": "Vietnam", "VU": "Vanuatu", "WS": "Samoa",
+    "XK": "Kosovo", "YE": "Yemen", "YT": "Mayotte", "ZA": "South Africa",
+    "ZM": "Zambia", "ZW": "Zimbabwe",
+}
+
+
 def _build_country211_spec(args) -> TaskSpec:
     """Build Country211 task specification."""
     import torchvision
     dataset = torchvision.datasets.Country211(
         root=args.data_dir or "./data", split="test", download=True
     )
-    class_names = list(dataset.classes) if hasattr(dataset, 'classes') else []
-    if not class_names:
-        class_names = [f"country_{i}" for i in range(211)]
-    class_names = [c.replace("_", " ") for c in class_names]
+    # Get ISO codes from dataset
+    iso_codes = list(dataset.classes) if hasattr(dataset, 'classes') else []
+    if not iso_codes:
+        iso_codes = [f"country_{i}" for i in range(211)]
+    # Map ISO codes to full country names for CLIP
+    class_names = [ISO_TO_COUNTRY.get(c.strip(), c) for c in iso_codes]
     return TaskSpec(
         task_type="classification",
         dataset_name="country211",
