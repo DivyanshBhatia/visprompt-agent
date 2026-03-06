@@ -48,8 +48,16 @@ LLM_CONFIGS = [
 ]
 
 DATASET_CONFIGS = {
+    "cifar10": {"val_size": 10000},
     "cifar100": {"val_size": 10000},
     "flowers102": {"val_size": 6149},
+    "dtd": {"val_size": 1880},
+    "food101": {"val_size": 10000},
+    "eurosat": {"val_size": 5000},
+    "oxford_pets": {"val_size": 3669},
+    "caltech101": {"val_size": 6084},
+    "fgvc_aircraft": {"val_size": 3333},
+    "country211": {"val_size": 10000},
 }
 
 WEIGHT_CONFIGS = [
@@ -265,25 +273,38 @@ def main():
             args.clip_model = bb_model
             # Create runner directly with pretrained param
             from visprompt.tasks.classification import CLIPClassificationRunner
+            from scripts.run import _load_pil_dataset
 
-            if args.dataset == "cifar100":
+            args.val_size = DATASET_CONFIGS[dataset]["val_size"]
+
+            # CIFAR-10/100 have .data attribute (numpy arrays directly)
+            if dataset in ("cifar10", "cifar100"):
                 import torchvision
-                ds = torchvision.datasets.CIFAR100(
-                    root=args.data_dir or "./data", train=False, download=True
-                )
+                ds_cls = torchvision.datasets.CIFAR100 if dataset == "cifar100" else torchvision.datasets.CIFAR10
+                ds = ds_cls(root=args.data_dir or "./data", train=False, download=True)
                 n_val = DATASET_CONFIGS[dataset]["val_size"]
                 indices = np.random.RandomState(42).permutation(len(ds))[:n_val]
                 images = np.array(ds.data)[indices]
                 labels_arr = np.array(ds.targets)[indices]
-            elif args.dataset == "flowers102":
-                from scripts.run import _load_pil_dataset
-                args.val_size = DATASET_CONFIGS[dataset]["val_size"]
-                images, labels_arr = _load_pil_dataset(
-                    "Flowers102", args, split="test",
-                    dataset_kwargs={"split": "test"},
-                )
             else:
-                raise ValueError(f"Dataset {dataset} not supported in cross-ablation")
+                # All other datasets use _load_pil_dataset
+                DATASET_LOADERS = {
+                    "flowers102": ("Flowers102", {"split": "test"}),
+                    "dtd": ("DTD", {"split": "test"}),
+                    "food101": ("Food101", {"split": "test"}),
+                    "eurosat": ("EuroSAT", {}),
+                    "oxford_pets": ("OxfordIIITPet", {"split": "test"}),
+                    "caltech101": ("Caltech101", {}),
+                    "fgvc_aircraft": ("FGVCAircraft", {"split": "test"}),
+                    "country211": ("Country211", {"split": "test"}),
+                }
+                if dataset not in DATASET_LOADERS:
+                    raise ValueError(f"Dataset {dataset} not supported in cross-ablation")
+                loader_name, loader_kwargs = DATASET_LOADERS[dataset]
+                images, labels_arr = _load_pil_dataset(
+                    loader_name, args, split=loader_kwargs.get("split"),
+                    dataset_kwargs=loader_kwargs,
+                )
 
             task_runner = CLIPClassificationRunner(
                 clip_model_name=bb_model,
