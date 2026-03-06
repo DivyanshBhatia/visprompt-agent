@@ -55,6 +55,18 @@ def main():
         results["single_template"] = runner.run_single_template()
         results["80_template_ensemble"] = runner.run_80_template_ensemble()
         results["waffle_clip"] = runner.run_waffle_clip()
+        try:
+            results["zpe"] = runner.run_zpe()
+        except Exception as e:
+            logging.warning(f"ZPE failed: {e}")
+        try:
+            results["frolic"] = runner.run_frolic()
+        except Exception as e:
+            logging.warning(f"Frolic failed: {e}")
+        try:
+            results["clip_enhance"] = runner.run_clip_enhance()
+        except Exception as e:
+            logging.warning(f"CLIP-Enhance failed: {e}")
         runner._print_comparison(results)
     else:
         results = runner.run_all(llm_model=args.llm, llm_provider=args.llm_provider)
