@@ -37,6 +37,7 @@ class CLIPClassificationRunner(BaseTaskRunner):
     def __init__(
         self,
         clip_model_name: str = "ViT-L/14",
+        pretrained: str = "openai",
         device: str = "cuda",
         images: Optional[np.ndarray] = None,
         labels: Optional[np.ndarray] = None,
@@ -46,6 +47,7 @@ class CLIPClassificationRunner(BaseTaskRunner):
         """
         Args:
             clip_model_name: CLIP backbone name. Default ViT-L/14 for best accuracy.
+            pretrained: Pretrained weights. 'openai' for OpenAI CLIP, or open_clip pretrained tag.
             device: Torch device.
             images: Pre-loaded image array (N, H, W, C) or None.
             labels: Ground-truth label indices (N,) or None.
@@ -53,6 +55,7 @@ class CLIPClassificationRunner(BaseTaskRunner):
             dataset_loader: Optional torchvision dataset or custom loader.
         """
         self.clip_model_name = clip_model_name
+        self.pretrained = pretrained
         self.device = device
         self._images = images
         self._labels = labels
@@ -84,33 +87,44 @@ class CLIPClassificationRunner(BaseTaskRunner):
         if self._clip_model is not None:
             return
 
-        try:
-            import clip
-            import torch
+        import torch
+        self._torch = torch
 
-            self._clip_model, self._clip_preprocess = clip.load(
-                self.clip_model_name, device=self.device
-            )
-            self._tokenizer = clip.tokenize
-            self._torch = torch
-        except ImportError:
+        # Try OpenAI CLIP first (only works for 'openai' pretrained)
+        if self.pretrained == "openai":
             try:
-                import open_clip
+                import clip
+                self._clip_model, self._clip_preprocess = clip.load(
+                    self.clip_model_name, device=self.device
+                )
+                self._tokenizer = clip.tokenize
+                return
+            except (ImportError, RuntimeError):
+                pass
 
-                model, _, preprocess = open_clip.create_model_and_transforms(
-                    self.clip_model_name, pretrained="openai"
+        # Use open_clip for all other models (EVA-CLIP, MetaCLIP, SigLIP, LAION, etc.)
+        try:
+            import open_clip
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                self.clip_model_name, pretrained=self.pretrained
+            )
+            model = model.to(self.device)
+            self._clip_model = model
+            self._clip_preprocess = preprocess
+            self._tokenizer = open_clip.get_tokenizer(self.clip_model_name)
+
+            # SigLIP and some models don't have logit_scale — create a default
+            if not hasattr(self._clip_model, 'logit_scale'):
+                self._clip_model.logit_scale = torch.nn.Parameter(
+                    torch.tensor(4.6052, device=self.device)  # log(100)
                 )
-                model = model.to(self.device)
-                self._clip_model = model
-                self._clip_preprocess = preprocess
-                self._tokenizer = open_clip.get_tokenizer(self.clip_model_name)
-                import torch
-                self._torch = torch
-            except ImportError:
-                raise ImportError(
-                    "Install either 'clip' (pip install git+https://github.com/openai/CLIP.git) "
-                    "or 'open_clip' (pip install open-clip-torch)"
-                )
+                logger.info(f"[CLIPRunner] Model lacks logit_scale, using default=100.0")
+
+        except ImportError:
+            raise ImportError(
+                "Install either 'clip' (pip install git+https://github.com/openai/CLIP.git) "
+                "or 'open_clip' (pip install open-clip-torch)"
+            )
 
     def _encode_images_cached(self, view_name, transform_fn):
         """Encode images with a given transform, caching results.

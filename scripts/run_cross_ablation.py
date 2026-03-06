@@ -26,12 +26,25 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────
-CLIP_BACKBONES = ["ViT-B/32", "ViT-B/16", "ViT-L/14"]
+CLIP_BACKBONES = [
+    # OpenAI CLIP family
+    ("ViT-B/32", "openai", "CLIP-B/32"),
+    ("ViT-B/16", "openai", "CLIP-B/16"),
+    ("ViT-L/14", "openai", "CLIP-L/14"),
+    # EVA-CLIP family (better training, same arch)
+    ("EVA02-B-16", "merged2b_s8b_b131k", "EVA02-B/16"),
+    # MetaCLIP family (curated data from Meta)
+    ("ViT-B-32-quickgelu", "metaclip_400m", "MetaCLIP-B/32"),
+    ("ViT-L-14-quickgelu", "metaclip_400m", "MetaCLIP-L/14"),
+    # SigLIP family (Google, sigmoid loss)
+    ("ViT-B-16-SigLIP", "webli", "SigLIP-B/16"),
+]
 
 LLM_CONFIGS = [
     {"model": "gpt-4o", "provider": "openai", "label": "GPT-4o"},
-    {"model": "gpt-4o-mini", "provider": "openai", "label": "GPT-4o-mini"},
-    {"model": "claude-sonnet-4-20250514", "provider": "anthropic", "label": "Claude-Sonnet"},
+    {"model": "gpt-5.2", "provider": "openai", "label": "GPT-5.2"},
+    {"model": "claude-sonnet-4-20250514", "provider": "anthropic", "label": "Claude-Sonnet-4"},
+    {"model": "claude-opus-4-5-20251101", "provider": "anthropic", "label": "Claude-Opus-4.5"},
 ]
 
 DATASET_CONFIGS = {
@@ -184,7 +197,11 @@ def main():
     parser = argparse.ArgumentParser(description="Full cross-product ablation")
     parser.add_argument("--datasets", nargs="+", default=["cifar100", "flowers102"],
                         choices=list(DATASET_CONFIGS.keys()))
-    parser.add_argument("--backbones", nargs="+", default=CLIP_BACKBONES)
+    parser.add_argument("--backbones", nargs="+",
+                        default=["CLIP-B/32", "CLIP-B/16", "CLIP-L/14",
+                                 "EVA02-B/16", "MetaCLIP-B/32", "MetaCLIP-L/14",
+                                 "SigLIP-B/16"],
+                        help="Backbone labels to test (from CLIP_BACKBONES)")
     parser.add_argument("--openai-key", type=str, help="OpenAI API key")
     parser.add_argument("--anthropic-key", type=str, help="Anthropic API key")
     parser.add_argument("--device", type=str, default="cuda")
@@ -231,14 +248,50 @@ def main():
 
         dataset_results = {}
 
-        for backbone in args.backbones:
+        # Filter backbones by user selection
+        selected_backbones = [
+            bb for bb in CLIP_BACKBONES if bb[2] in args.backbones
+        ]
+        if not selected_backbones:
+            logger.warning(f"No matching backbones found for {args.backbones}")
+            continue
+
+        for bb_model, bb_pretrained, bb_label in selected_backbones:
             print(f"\n{'='*65}")
-            print(f"  BACKBONE: {backbone}")
+            print(f"  BACKBONE: {bb_label} ({bb_model}, pretrained={bb_pretrained})")
             print(f"{'='*65}")
 
             # Build runner for this backbone
-            args.clip_model = backbone
-            task_runner = build_task_runner(args, task_spec)
+            args.clip_model = bb_model
+            # Create runner directly with pretrained param
+            from visprompt.tasks.classification import CLIPClassificationRunner
+
+            if args.dataset == "cifar100":
+                import torchvision
+                ds = torchvision.datasets.CIFAR100(
+                    root=args.data_dir or "./data", train=False, download=True
+                )
+                n_val = DATASET_CONFIGS[dataset]["val_size"]
+                indices = np.random.RandomState(42).permutation(len(ds))[:n_val]
+                images = np.array(ds.data)[indices]
+                labels_arr = np.array(ds.targets)[indices]
+            elif args.dataset == "flowers102":
+                from scripts.run import _load_pil_dataset
+                args.val_size = DATASET_CONFIGS[dataset]["val_size"]
+                images, labels_arr = _load_pil_dataset(
+                    "Flowers102", args, split="test",
+                    dataset_kwargs={"split": "test"},
+                )
+            else:
+                raise ValueError(f"Dataset {dataset} not supported in cross-ablation")
+
+            task_runner = CLIPClassificationRunner(
+                clip_model_name=bb_model,
+                pretrained=bb_pretrained,
+                device=args.device,
+                images=images,
+                labels=labels_arr,
+            )
             task_runner._ensure_model()
             task_runner.load_data()
 
@@ -325,7 +378,7 @@ def main():
 
                 backbone_results[llm_label] = llm_results
 
-            dataset_results[backbone] = backbone_results
+            dataset_results[bb_label] = backbone_results
 
         all_results[dataset] = dataset_results
 
