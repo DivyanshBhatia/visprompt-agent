@@ -216,8 +216,12 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
         }
+        # GPT-5+ models require max_completion_tokens instead of max_tokens
+        if self.model.startswith("gpt-5") or self.model.startswith("o1") or self.model.startswith("o3"):
+            kwargs["max_completion_tokens"] = self.max_tokens
+        else:
+            kwargs["max_tokens"] = self.max_tokens
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
