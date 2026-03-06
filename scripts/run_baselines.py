@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--llm", type=str, default="gpt-4o")
     parser.add_argument("--llm-provider", type=str, default="openai")
     parser.add_argument("--skip-llm", action="store_true", help="Skip CuPL (no LLM cost)")
+    parser.add_argument("--only-new", action="store_true",
+                        help="Run only new baselines: DCLIP, ZPE, Frolic, CLIP-Enhance")
     parser.add_argument("--output-dir", type=str, default="experiments/baselines")
     parser.add_argument("--verbose", "-v", action="store_true")
 
@@ -49,7 +51,27 @@ def main():
 
     runner = BaselineRunner(task_runner=task_runner, task_spec=task_spec)
 
-    if args.skip_llm:
+    if args.only_new:
+        # Run only the 4 new strong baselines
+        results = {}
+        try:
+            results["zpe"] = runner.run_zpe()
+        except Exception as e:
+            logging.warning(f"ZPE failed: {e}")
+        try:
+            results["frolic"] = runner.run_frolic()
+        except Exception as e:
+            logging.warning(f"Frolic failed: {e}")
+        try:
+            results["clip_enhance"] = runner.run_clip_enhance()
+        except Exception as e:
+            logging.warning(f"CLIP-Enhance failed: {e}")
+        try:
+            results["dclip"] = runner.run_dclip(llm_model=args.llm, llm_provider=args.llm_provider)
+        except Exception as e:
+            logging.warning(f"DCLIP failed: {e}")
+        runner._print_comparison(results)
+    elif args.skip_llm:
         # Only run free baselines (no LLM cost)
         results = {}
         results["single_template"] = runner.run_single_template()
