@@ -214,6 +214,8 @@ def main():
     parser.add_argument("--anthropic-key", type=str, help="Anthropic API key")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--output-dir", type=str, default="experiments/cross_ablation")
+    parser.add_argument("--llms", nargs="+", default=None,
+                        help="Run only specific LLMs by label (e.g. --llms GPT-5.2 Claude-Opus-4.5)")
     parser.add_argument("--verbose", "-v", action="store_true")
     # Dummy args for build_task_spec compatibility
     parser.add_argument("--config", type=str)
@@ -236,6 +238,16 @@ def main():
         os.environ["OPENAI_API_KEY"] = args.openai_key
     if args.anthropic_key:
         os.environ["ANTHROPIC_API_KEY"] = args.anthropic_key
+
+    # Filter LLMs if --llms specified
+    if args.llms:
+        llm_configs = [c for c in LLM_CONFIGS if c["label"] in args.llms]
+        if not llm_configs:
+            print(f"ERROR: No matching LLMs found. Available: {[c['label'] for c in LLM_CONFIGS]}")
+            sys.exit(1)
+        print(f"Running only LLMs: {[c['label'] for c in llm_configs]}")
+    else:
+        llm_configs = LLM_CONFIGS
 
     from scripts.run import build_task_spec, build_task_runner
     from visprompt.baselines import IMAGENET_TEMPLATES
@@ -338,7 +350,7 @@ def main():
                 }
             }
 
-            for llm_cfg in LLM_CONFIGS:
+            for llm_cfg in llm_configs:
                 llm_model = llm_cfg["model"]
                 llm_provider = llm_cfg["provider"]
                 llm_label = llm_cfg["label"]
