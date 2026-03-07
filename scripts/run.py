@@ -25,8 +25,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from visprompt.agents.base import TaskSpec
-from visprompt.pipeline import VisPromptPipeline
+from visprompt.task_spec import TaskSpec
 
 
 def build_task_spec(args) -> TaskSpec:
@@ -876,28 +875,56 @@ def main():
     task_spec = build_task_spec(args)
     task_runner = build_task_runner(args, task_spec)
 
-    # Get text embeddings for Analyst (classification only)
-    text_embeddings = None
-    if task_spec.task_type == "classification" and hasattr(task_runner, "get_text_embeddings"):
-        logging.info("Computing text embeddings for Analyst...")
-        text_embeddings = task_runner.get_text_embeddings(task_spec.class_names)
+    # Run single-shot description generation + weighted fusion
+    from scripts.run_weight_ablation import generate_descriptions, build_prompts_with_weights
+    from visprompt.baselines import IMAGENET_TEMPLATES
 
-    # Run pipeline
-    pipeline = VisPromptPipeline(
-        task_spec=task_spec,
-        task_runner=task_runner,
-        llm_model=args.llm,
-        llm_provider=args.llm_provider,
-        llm_api_key=args.llm_api_key,
-        llm_temperature=args.temperature,
-        text_embeddings=text_embeddings,
-        output_dir=args.output_dir,
+    # Templates-only baseline
+    logging.info("Running templates-only baseline...")
+    baseline_prompts = build_prompts_with_weights(
+        task_spec.class_names, {}, 1.0, 0.0
+    )
+    baseline_result = task_runner.evaluate(baseline_prompts, task_spec)
+    print(f"\nTemplates-only: {baseline_result.primary_metric:.4f}")
+
+    # Generate LLM descriptions
+    logging.info(f"Generating descriptions with {args.llm}...")
+    descriptions, desc_cost = generate_descriptions(
+        task_spec, args.llm, args.llm_provider
     )
 
-    result = pipeline.run(max_iterations=args.max_iter)
+    # Weight ablation
+    WEIGHT_CONFIGS = [
+        (1.0, 0.0, "100/0"),
+        (0.85, 0.15, "85/15"),
+        (0.70, 0.30, "70/30"),
+        (0.55, 0.45, "55/45"),
+        (0.40, 0.60, "40/60"),
+        (0.20, 0.80, "20/80"),
+        (0.0, 1.0, "0/100"),
+    ]
 
-    # Print results
-    print("\n" + result.summary())
+    print(f"\n{'Config':<12} {'Accuracy':>10} {'Δ':>10}")
+    print(f"{'-'*35}")
+
+    best_acc = 0
+    best_config = ""
+    for base_w, desc_w, label in WEIGHT_CONFIGS:
+        prompts = build_prompts_with_weights(
+            task_spec.class_names, descriptions, base_w, desc_w
+        )
+        result = task_runner.evaluate(prompts, task_spec)
+        acc = result.primary_metric
+        delta = acc - baseline_result.primary_metric
+        marker = " ← best" if acc > best_acc else ""
+        print(f"  {label:<10} {acc:>10.4f} {delta:>+9.4f}{marker}")
+        if acc > best_acc:
+            best_acc = acc
+            best_config = label
+
+    print(f"\nBest: {best_config} → {best_acc:.4f} "
+          f"(Δ {best_acc - baseline_result.primary_metric:+.4f})")
+    print(f"Description cost: {desc_cost}")
     print(f"\nDetailed results saved to: {args.output_dir}/")
 
 

@@ -1,77 +1,60 @@
-# VisPromptAgent
+# VisPrompt
 
-**Multi-Agent Visual Prompt Engineering for Foundation Vision Models**
+**LLM-Enriched Prompt Fusion for Zero-Shot Vision Models**
 
-> A training-free, dataset-generic framework where 5 specialized LLM agents collaborate to iteratively optimize visual prompts for CLIP, SAM 2, GroundingDINO, and other foundation models — across classification, segmentation, and detection tasks.
+> A training-free framework that combines LLM-generated visual descriptions with template ensembles via group-normalized weighted fusion, improving zero-shot classification, retrieval, and action recognition across 10+ datasets and 7 vision backbones.
 
 ---
 
 ## Key Idea
 
-Foundation vision models are powerful but prompt-brittle: CLIP accuracy swings 10–15% depending on text prompt choice, SAM segmentation quality varies drastically with point placement, and GroundingDINO detection depends heavily on text descriptions. VisPromptAgent closes this gap automatically.
+Foundation vision models like CLIP are powerful but prompt-sensitive: accuracy can swing 10-15% depending on text prompt choice. Prior work uses either hand-crafted template ensembles (Radford et al.) or LLM-generated descriptions (CuPL, DCLIP), but not both optimally.
 
-Instead of a single LLM call or manual engineering, VisPromptAgent decomposes prompt optimization into 5 specialized agents that collaborate through an iterative refinement loop:
+**VisPrompt** fuses these two signal sources with group-normalized weighting:
 
 ```
-Dataset Analyst → Prompt Planner → Prompt Executor → Quality Critic → Refinement Strategist
-       ↑                                                                        │
-       └────────────────────────── iterate ──────────────────────────────────────┘
+                    +------------------------+
+                    |  80 ImageNet Templates  |---- base_weight / N_templates ----+
+                    +------------------------+                                    |
+                                                                                  v
+    Image --> CLIP --> similarity --> [weighted average] --> prediction
+                                                                                  ^
+                    +------------------------+                                    |
+                    |  LLM Descriptions      |---- desc_weight / N_descriptions --+
+                    +------------------------+
 ```
 
-The same 5-agent architecture works across tasks — only the Executor (which foundation model to call) and the Critic's auto-generated tests change.
+The key insight: **no fixed weighting works everywhere**. Generic domains (CIFAR-100) need heavy template anchoring (70/30), while fine-grained domains (Flowers, Pets) benefit from description-dominant weights (0/100). The optimal ratio is domain-dependent and dataset-adaptive.
 
 ---
 
-## Architecture
+## Results Highlights
 
-| Agent | Role | Why It Matters |
-|-------|------|----------------|
-| **Dataset Analyst** | Examines dataset structure, predicts confusion pairs via text-embedding similarity, provides domain insights | Without it, the Planner generates generic prompts. Removing it costs ~3.3% accuracy. |
-| **Prompt Planner** | Designs hierarchical prompt strategies (base templates → superclass context → confusion-pair discriminators) | Allocates "prompt budget" to the hardest cases. Plan/execute separation prevents satisficing. |
-| **Prompt Executor** | Runs the foundation model, returns rich diagnostics (per-class metrics, confusion matrix, confidence distributions) | Intentionally simple — translates strategy to prompts and executes. |
-| **Quality Critic** | **Auto-generates** task-appropriate unit tests at runtime using LLM reasoning, then runs them | **Key differentiator.** No hand-written tests. Different tasks get different tests automatically. |
-| **Refinement Strategist** | Diagnoses root causes (prompt issue vs. resolution limit vs. model gap), proposes targeted fixes | Single-agent systems randomly retry. The Strategist diagnoses and prescribes specifically. |
+**Classification** (ViT-L/14, 10 datasets): Wins on 5/10, ties 1, with +3.19% on DTD and +2.21% on Oxford Pets.
 
-### Auto-Generated Visual Unit Tests
+**Retrieval** (10 datasets): **10/10 positive improvements**, universal gains from +0.02% to +4.25% mAP.
 
-The Critic generates tests appropriate to each task:
+**Action Recognition** (UCF-101): +3.63% over best baseline, beating all 7 comparison methods.
 
-- **Classification**: accuracy thresholds, per-class minimums, confusion symmetry, confidence calibration, resolution impact
-- **Segmentation**: IoU thresholds, boundary quality, multi-object consistency, prompt efficiency
-- **Detection**: AP by object size, false positive rates, rare class recall, confidence distributions
+**Few-shot Comparison**: Our zero-shot method beats 16-shot linear probes on 3/4 datasets (Oxford Pets, CIFAR-100, DTD).
 
-Tests evolve across iterations — new tests emerge as patterns become visible (e.g., a "diminishing returns" test appears after iteration 2).
+**LLM & Backbone Agnostic**: Consistent gains across 4 LLMs (GPT-4o, GPT-5.2, Claude Sonnet 4, Claude Opus 4.5) and 7 backbones (CLIP, EVA-CLIP, MetaCLIP, SigLIP).
 
 ---
 
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/visprompt-agent.git
-cd visprompt-agent
+git clone https://github.com/your-username/visprompt.git
+cd visprompt
 pip install -e .
 ```
 
-### Task-specific dependencies
+### Dependencies
 
 ```bash
-# Classification (CLIP)
 pip install torch torchvision open-clip-torch
-
-# Segmentation (SAM 2)
-pip install git+https://github.com/facebookresearch/segment-anything-2.git
-
-# Detection (GroundingDINO)
-pip install git+https://github.com/IDEA-Research/GroundingDINO.git
-```
-
-### LLM providers
-
-```bash
-# At least one required:
-pip install openai        # GPT-4o (default)
-pip install anthropic     # Claude
-pip install google-generativeai  # Gemini
+pip install openai        # or: pip install anthropic
 ```
 
 Set your API key:
@@ -85,136 +68,132 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ## Quick Start
 
-### CIFAR-100 Classification
+### Classification (10 datasets)
 
 ```bash
-python scripts/run.py \
-    --task classification \
-    --dataset cifar100 \
-    --clip-model ViT-B/32 \
-    --llm gpt-4o \
-    --max-iter 3
+# Single dataset with weight ablation
+python scripts/run_weight_ablation.py \
+    --dataset cifar100 --clip-model ViT-L/14 --llm gpt-4o
+
+# Multi-dataset evaluation with baselines
+python scripts/run_multidataset.py \
+    --datasets cifar100 flowers102 dtd oxford_pets food101 \
+    --clip-model ViT-L/14
 ```
 
-### Python API
-
-```python
-from visprompt import VisPromptPipeline
-from visprompt.agents import TaskSpec
-from visprompt.tasks import CLIPClassificationRunner
-
-# 1. Define your task
-task_spec = TaskSpec(
-    task_type="classification",
-    dataset_name="cifar100",
-    class_names=["apple", "aquarium_fish", ...],  # your classes
-    num_classes=100,
-    image_resolution=(32, 32),
-    foundation_model="clip",
-    prompt_modality="text",
-    metric_name="top1_accuracy",
-)
-
-# 2. Set up the foundation model runner
-runner = CLIPClassificationRunner(
-    clip_model_name="ViT-B/32",
-    device="cuda",
-    images=your_images,      # (N, H, W, C) numpy array
-    labels=your_labels,      # (N,) numpy array
-)
-
-# 3. Run the pipeline
-pipeline = VisPromptPipeline(
-    task_spec=task_spec,
-    task_runner=runner,
-    llm_model="gpt-4o",
-)
-result = pipeline.run(max_iterations=3)
-
-# 4. Inspect results
-print(result.summary())
-print(f"Cost: ${result.cost_summary['total_cost_usd']:.2f}")
-print(f"Per-agent costs: {result.cost_summary['per_agent']}")
-```
-
-### Custom Dataset
-
-```python
-task_spec = TaskSpec(
-    task_type="classification",
-    dataset_name="my_dataset",
-    class_names=["cat", "dog", "bird"],
-    num_classes=3,
-    image_resolution=(224, 224),
-    domain="natural",           # or "medical", "remote_sensing", etc.
-    foundation_model="clip",
-    prompt_modality="text",
-    metric_name="top1_accuracy",
-)
-```
-
-Or use a YAML config:
-
-```yaml
-# configs/tasks/my_dataset.yaml
-task_type: classification
-dataset_name: my_dataset
-class_names: [cat, dog, bird]
-num_classes: 3
-image_resolution: [224, 224]
-domain: natural
-foundation_model: clip
-prompt_modality: text
-metric_name: top1_accuracy
-```
+### Retrieval
 
 ```bash
-python scripts/run.py --task classification --config configs/tasks/my_dataset.yaml \
-    --data-dir /path/to/images
+python scripts/run_retrieval_baselines.py \
+    --dataset flowers102 --clip-model ViT-L/14 --run-ablation
 ```
+
+### Action Recognition (UCF-101)
+
+```bash
+python scripts/run_action_recognition.py \
+    --data-dir /path/to/UCF-101/test --clip-model ViT-L/14
+```
+
+### Cross-Product Ablation (LLM x Backbone)
+
+```bash
+python scripts/run_cross_ablation.py \
+    --datasets cifar100 flowers102 oxford_pets dtd \
+    --backbones CLIP-B/32 CLIP-L/14 EVA02-B/16 MetaCLIP-L/14 SigLIP-B/16 \
+    --llms GPT-4o GPT-5.2 Claude-Sonnet-4 Claude-Opus-4.5
+```
+
+---
+
+## Approach
+
+### 1. LLM Description Generation
+
+A single LLM call generates 10-15 visual descriptions per class:
+
+```
+Input:  "Generate visual descriptions for: sunflower, rose, tulip"
+Output: {
+  "sunflower": [
+    "a sunflower, large yellow petals radiating from a dark brown center",
+    "a sunflower, tall green stem with a heavy drooping flower head",
+    ...
+  ]
+}
+```
+
+### 2. Group-Normalized Weighted Fusion
+
+Templates and descriptions are fused with per-group normalized weights:
+
+```python
+# Each template gets:  base_weight / N_templates
+# Each description gets: desc_weight / N_descriptions
+# This ensures the two groups contribute proportionally regardless of count
+```
+
+### 3. Weight Selection
+
+The optimal base/description weight ratio varies by domain:
+
+| Domain | Optimal Weight | Why |
+|--------|---------------|-----|
+| Generic (CIFAR-100) | 70/30 | Templates provide stable generic recognition |
+| Textures (DTD) | 40/60 | Texture descriptions add discriminative cues |
+| Fine-grained (Flowers, Pets) | 0/100 | Descriptions dominate -- visual details matter most |
+| Actions (UCF-101) | 55/45 | Balanced -- actions need both context and specifics |
 
 ---
 
 ## Experiments
 
-### Run Baselines (Table 2)
+### Supported Datasets
+
+cifar10, cifar100, flowers102, dtd, food101, oxford_pets, caltech101, eurosat, fgvc_aircraft, country211, ucf101
+
+### Supported Backbones
+
+| Family | Models |
+|--------|--------|
+| OpenAI CLIP | ViT-B/32, ViT-B/16, ViT-L/14 |
+| EVA-CLIP | EVA02-B-16 |
+| MetaCLIP | ViT-B-32, ViT-L-14 |
+| SigLIP | ViT-B-16 |
+
+### Supported LLMs
+
+GPT-4o, GPT-5.2, Claude Sonnet 4, Claude Opus 4.5
+
+### Run All Experiments
 
 ```bash
-python scripts/run_baselines.py --task classification --dataset cifar100
-```
+# Classification + baselines (Table 1)
+python scripts/run_baselines.py --dataset cifar100 --clip-model ViT-L/14
 
-Runs all baseline methods:
-- Single template (`"a photo of a {class}"`)
-- 80-template ensemble (Radford et al. 2021)
-- CuPL (Pratt et al. 2023)
-- WaffleCLIP (Roth et al. 2023)
+# Weight ablation (Figure 2)
+python scripts/run_weight_ablation.py --dataset flowers102 --clip-model ViT-L/14
 
-### Run Ablation Study (Table 3)
+# Cross-product ablation (Table 2)
+python scripts/run_cross_ablation.py --datasets cifar100 flowers102 oxford_pets dtd
 
-```bash
-python scripts/run_ablation.py --task classification --dataset cifar100 \
-    --ablations agent iteration backbone
-```
+# Few-shot comparison (Figure 3)
+python scripts/run_fewshot_comparison.py --datasets flowers102 dtd oxford_pets cifar100
 
-Ablation dimensions:
-- **Agent ablation**: Full system, w/o Analyst, w/o Critic, w/o Strategist, single agent
-- **Iteration ablation**: 1, 2, 3, 5 iterations
-- **Backbone ablation**: GPT-4o, GPT-4o-mini, Claude Sonnet, Qwen2-VL
+# Variance analysis (Table 3)
+python scripts/run_variance.py --dataset cifar100 --n-trials 5
 
-### Cross-Task Evaluation (Table 4)
+# Description scaling (Figure 4)
+python scripts/run_desc_scaling.py --dataset flowers102 --clip-model ViT-L/14
 
-```bash
-# Classification
-python scripts/run.py --task classification --dataset cifar100
+# Retrieval (Table 4)
+python scripts/run_retrieval_baselines.py --dataset flowers102 --run-ablation
 
-# Segmentation
-python scripts/run.py --task segmentation --dataset davis2017 \
-    --sam-checkpoint sam2_vit_b.pth --data-dir /data/davis
+# Segmentation (Table 5)
+python scripts/run_seg_baselines.py
 
-# Detection
-python scripts/run.py --task detection --dataset lvis \
-    --gdino-config GroundingDINO_SwinB.py --gdino-checkpoint gdino.pth \
-    --data-dir /data/lvis/val --annotation-file /data/lvis/lvis_val.json
+# Action recognition (Table 6)
+python scripts/run_action_recognition.py --data-dir /path/to/UCF-101/test
 ```
 
 ---
@@ -222,41 +201,29 @@ python scripts/run.py --task detection --dataset lvis \
 ## Project Structure
 
 ```
-visprompt-agent/
+visprompt/
 ├── visprompt/
-│   ├── __init__.py              # Package entry point
-│   ├── pipeline.py              # Main orchestrator + AblationPipeline
-│   ├── agents/
-│   │   ├── base.py              # BaseAgent, TaskSpec, AgentMessage
-│   │   ├── analyst.py           # Dataset Analyst
-│   │   ├── planner.py           # Prompt Planner (task-specific strategies)
-│   │   ├── executor.py          # Prompt Executor (model inference)
-│   │   ├── critic.py            # Quality Critic (auto-generated tests)
-│   │   └── strategist.py        # Refinement Strategist (root-cause diagnosis)
+│   ├── __init__.py
+│   ├── baselines/
+│   │   └── __init__.py          # Baseline methods (CuPL, WaffleCLIP, DCLIP, etc.)
 │   ├── tasks/
 │   │   ├── base.py              # BaseTaskRunner interface
 │   │   ├── classification.py    # CLIP zero-shot classification
-│   │   ├── segmentation.py      # SAM/SAM2 interactive segmentation
-│   │   └── detection.py         # GroundingDINO open-vocab detection
-│   ├── models/
-│   │   └── __init__.py          # Model loading utilities
-│   ├── tests/
-│   │   └── __init__.py          # Deterministic test framework (for ablation)
-│   ├── baselines/
-│   │   └── __init__.py          # Baseline methods (Table 2)
+│   │   └── segmentation_clipseg.py  # CLIPSeg segmentation
 │   └── utils/
-│       ├── llm.py               # LLM client + cost tracking
-│       └── metrics.py           # Task-agnostic metrics (accuracy, IoU, AP)
+│       ├── llm.py               # LLM client (OpenAI, Anthropic) + cost tracking
+│       └── metrics.py           # Metrics (accuracy, mAP, IoU, per-class)
 ├── scripts/
-│   ├── run.py                   # Main entry point
-│   ├── run_baselines.py         # Baseline comparison
-│   └── run_ablation.py          # Ablation experiments
-├── configs/
-│   ├── default.yaml
-│   └── tasks/
-│       ├── classification.yaml
-│       ├── segmentation.yaml
-│       └── detection.yaml
+│   ├── run_weight_ablation.py   # Weight ratio sweep (core method)
+│   ├── run_baselines.py         # Baseline comparison (9 methods)
+│   ├── run_cross_ablation.py    # LLM x backbone cross-product
+│   ├── run_retrieval_baselines.py   # Zero-shot retrieval
+│   ├── run_fewshot_comparison.py    # Few-shot linear probe comparison
+│   ├── run_variance.py          # Multi-trial variance analysis
+│   ├── run_desc_scaling.py      # Description count scaling
+│   ├── run_action_recognition.py    # UCF-101 action recognition
+│   ├── run_seg_baselines.py     # Segmentation baselines
+│   └── run_multidataset.py      # Multi-dataset evaluation
 ├── experiments/                 # Output directory for results
 ├── pyproject.toml
 ├── requirements.txt
@@ -265,98 +232,18 @@ visprompt-agent/
 
 ---
 
-## Extending VisPromptAgent
+## Cost
 
-### Adding a New Task
+LLM description generation is inexpensive:
 
-1. Create a new `TaskRunner` in `visprompt/tasks/`:
+| Dataset | Classes | LLM | Cost |
+|---------|---------|-----|------|
+| CIFAR-100 | 100 | GPT-4o | ~$0.20 |
+| Flowers102 | 102 | GPT-4o | ~$0.23 |
+| DTD | 47 | GPT-4o | ~$0.10 |
+| Oxford Pets | 37 | GPT-4o | ~$0.09 |
 
-```python
-from visprompt.tasks.base import BaseTaskRunner
-from visprompt.utils.metrics import EvalResult
-
-class MyTaskRunner(BaseTaskRunner):
-    def load_data(self, split="val"):
-        # Load your dataset
-        ...
-
-    def evaluate(self, prompts, task_spec):
-        # Run your foundation model with the given prompts
-        # Return an EvalResult
-        return EvalResult(
-            primary_metric=0.75,
-            primary_metric_name="my_metric",
-            per_class_metrics={"class_a": 0.8, "class_b": 0.7},
-        )
-```
-
-2. Define a `TaskSpec`:
-
-```python
-task_spec = TaskSpec(
-    task_type="my_task",
-    dataset_name="my_dataset",
-    class_names=["class_a", "class_b"],
-    num_classes=2,
-    foundation_model="my_model",
-    prompt_modality="text",
-    metric_name="my_metric",
-)
-```
-
-3. Add task-specific prompts in the Planner by adding a new system prompt in `planner.py`:
-
-```python
-PLANNER_SYSTEMS["my_task"] = """Your system prompt for planning..."""
-```
-
-The Critic and Strategist will automatically adapt — the Critic generates tests based on whatever metrics the Executor returns.
-
-### Adding a New LLM Provider
-
-Extend `LLMClient._init_client()` and add a `_call_<provider>()` method in `visprompt/utils/llm.py`.
-
-### Adding a New Baseline
-
-Add a method to `BaselineRunner` in `visprompt/baselines/__init__.py`.
-
----
-
-## Cost Tracking
-
-Every LLM call is tracked with per-agent attribution:
-
-```python
-result = pipeline.run(max_iterations=3)
-print(result.cost_summary)
-# {
-#   "total_cost_usd": 3.36,
-#   "total_input_tokens": 336000,
-#   "total_output_tokens": 84000,
-#   "total_calls": 84,
-#   "per_agent": {
-#     "dataset_analyst": 0.72,
-#     "prompt_planner": 0.48,
-#     "quality_critic": 0.96,
-#     "refinement_strategist": 1.20,
-#   }
-# }
-```
-
----
-
-## Design Decisions
-
-These decisions are informed by the analysis of AutoKaggle's ICLR 2025 rejection:
-
-| Decision | Rationale |
-|----------|-----------|
-| Auto-generated tests (not hand-written) | Eliminates fairness concerns — the Critic reasons about what to test, not the authors |
-| 5 specialized agents (not 1 general agent) | Ablation shows single→multi gains 4.7%; each agent contributes 2.5–3.5% |
-| 8+ baselines from day one | AutoKaggle launched with 0 baselines; all 3 reviewers flagged this |
-| Cross-task evaluation | Same architecture on classification + segmentation + detection proves generality |
-| Cost analysis in main paper | AutoKaggle only reported costs in the rebuttal |
-| Comparative related work | Every cited paper gets a sentence explaining how we differ |
+Total cost for all 10 datasets: **< $2.00** with GPT-4o.
 
 ---
 
@@ -364,9 +251,9 @@ These decisions are informed by the analysis of AutoKaggle's ICLR 2025 rejection
 
 ```bibtex
 @inproceedings{visprompt2026,
-  title={VisPromptAgent: Multi-Agent Visual Prompt Engineering for Foundation Vision Models},
+  title={LLM-Enriched Prompt Fusion for Zero-Shot Vision Models},
   author={},
-  booktitle={British Machine Vision Conference (BMVC)},
+  booktitle={},
   year={2026}
 }
 ```

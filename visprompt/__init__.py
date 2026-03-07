@@ -1,7 +1,7 @@
-"""VisPromptAgent: Multi-Agent Visual Prompt Engineering for Foundation Vision Models."""
+"""VisPrompt: LLM-Enriched Prompt Fusion for Zero-Shot Vision Models."""
 
 __version__ = "0.1.0"
 
-from visprompt.pipeline import VisPromptPipeline
+from visprompt.task_spec import TaskSpec
 
-__all__ = ["VisPromptPipeline"]
+__all__ = ["TaskSpec"]

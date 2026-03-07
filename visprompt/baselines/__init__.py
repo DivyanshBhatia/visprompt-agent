@@ -15,7 +15,7 @@ import logging
 import random
 from typing import Any, Optional
 
-from visprompt.agents.base import TaskSpec
+from visprompt.task_spec import TaskSpec
 from visprompt.tasks.base import BaseTaskRunner
 from visprompt.utils.llm import CostTracker, LLMClient
 from visprompt.utils.metrics import EvalResult

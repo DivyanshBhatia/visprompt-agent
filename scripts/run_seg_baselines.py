@@ -177,7 +177,7 @@ def main():
     fg_classes = VOC_CLASSES[1:]  # 20 foreground classes
 
     from visprompt.tasks.segmentation_clipseg import CLIPSegRunner
-    from visprompt.agents.base import TaskSpec
+    from visprompt.task_spec import TaskSpec
 
     task_spec = TaskSpec(
         task_type="segmentation",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from visprompt.agents.base import TaskSpec
+from visprompt.task_spec import TaskSpec
 from visprompt.utils.metrics import EvalResult
 
 
