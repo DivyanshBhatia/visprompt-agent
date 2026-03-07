@@ -392,7 +392,7 @@ Each description should be a complete sentence starting with "A photo of" or "A 
 Return ONLY valid JSON, no markdown."""
 
         try:
-            response, usage = client.call(prompt, json_mode=True)
+            response = client.call(prompt, json_mode=True)
             import json as json_mod
             descs = json_mod.loads(response)
             
@@ -415,7 +415,7 @@ Return ONLY valid JSON, no markdown."""
                 else:
                     all_descriptions[cls_name] = []
             
-            cost = usage.total_cost if hasattr(usage, 'total_cost') else 0
+            cost = 0  # cost tracked internally by LLMClient
             total_cost += cost
             
         except Exception as e:
@@ -518,6 +518,8 @@ def main():
                         help="Use HuggingFace UCF-101 subset instead of local videos")
     parser.add_argument("--use-torchvision", action="store_true",
                         help="Use torchvision UCF101 loader (requires: pip install av)")
+    parser.add_argument("--skip-baselines", action="store_true",
+                        help="Skip baselines, only run weight ablation")
     parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--llm", type=str, default="gpt-4o")
@@ -631,7 +633,7 @@ Actions: {batch_str}
 Return JSON: {{"action": ["sentence1", ...]}}
 Return ONLY valid JSON."""
         try:
-            response, usage = cupl_client.call(prompt, json_mode=True)
+            response = cupl_client.call(prompt, json_mode=True)
             import json as json_mod
             descs = json_mod.loads(response)
             for cn in batch:
@@ -733,8 +735,8 @@ Actions: {batch_str}
 
 Respond ONLY with JSON: {{"action": ["descriptor1", "descriptor2", ...]}}"""
         try:
-            response, usage = cupl_client.call(prompt, json_mode=True)
-            descs = json_mod.loads(response)
+            response = cupl_client.call(prompt, json_mode=True)
+            import json as json_mod; descs = json_mod.loads(response)
             for cn in batch:
                 found = None
                 for key in descs:
@@ -783,7 +785,7 @@ Actions: {batch_str}
 Return JSON: {{"action": {{"synonyms": ["syn1", ...], "descriptions": ["desc1", ...]}}}}
 Return ONLY valid JSON."""
         try:
-            response, usage = cupl_client.call(prompt, json_mode=True)
+            response = cupl_client.call(prompt, json_mode=True)
             descs = json_mod.loads(response)
             for cn in batch:
                 found = None
