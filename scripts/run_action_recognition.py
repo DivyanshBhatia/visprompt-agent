@@ -239,7 +239,7 @@ def load_ucf101_from_hf():
         sys.exit(1)
     
     print("  Loading UCF-101 from HuggingFace...")
-    ds = load_dataset("sayakpaul/ucf101-subset", split="test")
+    ds = load_dataset("sayakpaul/ucf101-subset", split="train")
     
     images = []
     labels = []
@@ -268,6 +268,102 @@ def load_ucf101_from_hf():
     
     print(f"  Loaded {len(images_arr)} frames, {len(np.unique(labels_arr))} classes")
     return images_arr, labels_arr, readable_names
+
+
+def load_ucf101_torchvision(data_dir):
+    """Load UCF-101 via torchvision (requires pyav: pip install av)."""
+    import torchvision
+    
+    print("  Loading UCF-101 via torchvision (downloading if needed)...")
+    print("  This may take a while on first run (~6.5GB download)...")
+    
+    # torchvision downloads both videos and annotations
+    dataset = torchvision.datasets.UCF101(
+        root=data_dir,
+        annotation_path=os.path.join(data_dir, "ucfTrainTestlist"),
+        frames_per_clip=1,
+        step_between_clips=1000000,  # large step = ~1 clip per video
+        train=False,  # test split
+        output_format="THWC",
+        num_workers=0,
+    )
+    
+    print(f"  Dataset loaded: {len(dataset)} clips")
+    
+    images = []
+    labels = []
+    seen_videos = set()
+    
+    for i in range(len(dataset)):
+        try:
+            video, audio, label = dataset[i]
+            # video shape: (T, H, W, C) - take middle frame
+            mid = video.shape[0] // 2
+            frame = video[mid].numpy().astype(np.uint8)
+            
+            # Deduplicate: only take one frame per unique video+label
+            key = (label, i // 10)  # approximate dedup
+            if key in seen_videos:
+                continue
+            seen_videos.add(key)
+            
+            images.append(frame)
+            labels.append(label)
+        except Exception as e:
+            continue
+        
+        if (i + 1) % 500 == 0:
+            print(f"    Processed {i+1}/{len(dataset)} clips, {len(images)} frames kept...")
+    
+    try:
+        images_arr = np.stack(images)
+    except ValueError:
+        images_arr = np.empty(len(images), dtype=object)
+        for i, img in enumerate(images):
+            images_arr[i] = img
+    
+    labels_arr = np.array(labels)
+    n_classes = len(np.unique(labels_arr))
+    print(f"  Loaded {len(images_arr)} frames, {n_classes} classes")
+    
+    return images_arr, labels_arr, UCF101_CLASSES
+
+
+def load_ucf101_torchvision_simple(data_dir):
+    """Simpler UCF-101 loader: download videos, extract middle frames manually."""
+    import torchvision
+    import cv2
+    
+    print("  Downloading UCF-101 via torchvision...")
+    
+    # Just trigger the download
+    ucf_path = os.path.join(data_dir, "UCF-101")
+    annotation_path = os.path.join(data_dir, "ucfTrainTestlist")
+    
+    if not os.path.exists(ucf_path):
+        # Download using torchvision's internal mechanism
+        from torchvision.datasets.utils import download_and_extract_archive
+        url = "https://www.crcv.ucf.edu/data/UCF101/UCF101.rar"
+        try:
+            download_and_extract_archive(url, data_dir, filename="UCF101.rar")
+        except Exception:
+            print("  Auto-download failed. Please download UCF-101 manually:")
+            print("  wget https://www.crcv.ucf.edu/data/UCF101/UCF101.rar")
+            print("  unrar x UCF101.rar -d ./data/")
+            sys.exit(1)
+    
+    if not os.path.exists(annotation_path):
+        from torchvision.datasets.utils import download_and_extract_archive
+        url = "https://www.crcv.ucf.edu/data/UCF101/UCF101TrainTestSplits-RecognitionTask.zip"
+        try:
+            download_and_extract_archive(url, data_dir)
+        except Exception:
+            print("  Please download splits manually")
+            sys.exit(1)
+    
+    # Read test split
+    split_file = os.path.join(annotation_path, "testlist01.txt")
+    return load_ucf101_frames(ucf_path, split_file)
 
 
 def generate_action_descriptions(class_names, llm_model, llm_provider, batch_size=10):
@@ -420,6 +516,8 @@ def main():
                         help="Path to testlist01.txt")
     parser.add_argument("--use-hf-subset", action="store_true",
                         help="Use HuggingFace UCF-101 subset instead of local videos")
+    parser.add_argument("--use-torchvision", action="store_true",
+                        help="Use torchvision UCF101 loader (requires: pip install av)")
     parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--llm", type=str, default="gpt-4o")
@@ -446,6 +544,8 @@ def main():
     
     if args.use_hf_subset:
         images, labels, class_names = load_ucf101_from_hf()
+    elif args.use_torchvision:
+        images, labels, class_names = load_ucf101_torchvision(args.data_dir or "./data")
     else:
         images, labels, class_names = load_ucf101_frames(
             args.data_dir, args.split_file, args.max_per_class
@@ -494,6 +594,234 @@ def main():
     )
     print(f"  Accuracy: {templates_acc:.4f}")
     
+    # ── 1b. Additional baselines ──────────────────────────────────
+    print(f"\n--- Additional baselines ---")
+    
+    # Class name only: "apply eye makeup"
+    class_name_prompts = {"prompts_per_class": {
+        cn: {"prompts": [cn.lower()], "weights": [1.0]} for cn in class_names
+    }}
+    cn_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        class_name_prompts, args.device, class_names
+    )
+    print(f"  Class name only:    {cn_acc:.4f}")
+    
+    # Single template: "a photo of a person {action}"
+    single_prompts = {"prompts_per_class": {
+        cn: {"prompts": [f"a photo of a person {cn.lower()}."], "weights": [1.0]}
+        for cn in class_names
+    }}
+    single_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        single_prompts, args.device, class_names
+    )
+    print(f"  Single template:    {single_acc:.4f}")
+    
+    # CuPL-style: generate descriptions using a simpler prompt
+    print(f"\n--- CuPL baseline (GPT descriptions, no templates) ---")
+    from visprompt.utils.llm import LLMClient
+    cupl_client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+    cupl_descriptions = {}
+    for i in range(0, len(class_names), 10):
+        batch = class_names[i:i+10]
+        batch_str = ", ".join(batch)
+        prompt = f"""Describe the visual appearance of each action in a photo. For each action, give 5 short sentences.
+Actions: {batch_str}
+Return JSON: {{"action": ["sentence1", ...]}}
+Return ONLY valid JSON."""
+        try:
+            response, usage = cupl_client.call(prompt, json_mode=True)
+            import json as json_mod
+            descs = json_mod.loads(response)
+            for cn in batch:
+                for key in descs:
+                    if cn.lower().strip() in key.lower():
+                        cupl_descriptions[cn] = descs[key]
+                        break
+                if cn not in cupl_descriptions:
+                    cupl_descriptions[cn] = []
+        except Exception:
+            for cn in batch:
+                cupl_descriptions[cn] = []
+    
+    # CuPL: descriptions only (no templates)
+    cupl_prompts = {"prompts_per_class": {}}
+    for cn in class_names:
+        descs = cupl_descriptions.get(cn, [])
+        if descs:
+            cupl_prompts["prompts_per_class"][cn] = {
+                "prompts": descs, "weights": [1.0/len(descs)] * len(descs)
+            }
+        else:
+            cupl_prompts["prompts_per_class"][cn] = {
+                "prompts": [cn.lower()], "weights": [1.0]
+            }
+    cupl_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        cupl_prompts, args.device, class_names
+    )
+    print(f"  CuPL (desc only):   {cupl_acc:.4f}")
+    
+    # CuPL + ensemble (templates + CuPL descriptions, equal weight)
+    cupl_ens_prompts = {"prompts_per_class": {}}
+    for cn in class_names:
+        base = [t.format(cn.lower()) for t in ACTION_TEMPLATES] + \
+               [t.format(cn.lower()) for t in IMAGENET_TEMPLATES]
+        descs = cupl_descriptions.get(cn, [])
+        all_p = base + descs
+        cupl_ens_prompts["prompts_per_class"][cn] = {
+            "prompts": all_p, "weights": [1.0/len(all_p)] * len(all_p)
+        }
+    cupl_ens_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        cupl_ens_prompts, args.device, class_names
+    )
+    print(f"  CuPL + ensemble:    {cupl_ens_acc:.4f}")
+    
+    baselines = {
+        "class_name_only": float(cn_acc),
+        "single_template": float(single_acc),
+        "80_template_ensemble": float(templates_acc),
+        "cupl_desc_only": float(cupl_acc),
+        "cupl_ensemble": float(cupl_ens_acc),
+    }
+    
+    # WaffleCLIP: random descriptor ensembles
+    print(f"\n--- WaffleCLIP baseline ---")
+    import random
+    random.seed(42)
+    random_words = [
+        "bright", "dark", "colorful", "textured", "smooth", "rough",
+        "large", "small", "round", "angular", "metallic", "wooden",
+        "organic", "geometric", "striped", "spotted", "furry", "scaly",
+        "shiny", "matte", "transparent", "opaque", "symmetric", "curved",
+        "flat", "tall", "wide", "narrow", "detailed", "simple",
+        "natural", "artificial", "indoor", "outdoor", "urban", "rural",
+        "wet", "dry", "soft", "hard", "warm", "cool", "vibrant", "muted",
+        "patterned", "solid", "complex", "elegant", "compact", "sprawling",
+    ]
+    waffle_prompts = {"prompts_per_class": {}}
+    for cn in class_names:
+        wps = [f"a photo of a person {cn.lower()}"]
+        for _ in range(15):
+            n_words = random.randint(2, 5)
+            words = random.sample(random_words, n_words)
+            wps.append(f"a {' '.join(words)} photo of a person {cn.lower()}")
+        waffle_prompts["prompts_per_class"][cn] = {
+            "prompts": wps, "weights": [1.0/len(wps)] * len(wps)
+        }
+    waffle_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        waffle_prompts, args.device, class_names
+    )
+    print(f"  WaffleCLIP:         {waffle_acc:.4f}")
+    baselines["waffle_clip"] = float(waffle_acc)
+    
+    # DCLIP: "What does {action} look like?" descriptors
+    print(f"\n--- DCLIP baseline ---")
+    dclip_descriptions = {}
+    for i in range(0, len(class_names), 10):
+        batch = class_names[i:i+10]
+        batch_str = ", ".join(batch)
+        prompt = f"""For each action below, describe what it looks like in a photo.
+Give 5-8 short visual descriptors per action.
+Format each as: "{{action}} which has {{descriptor}}"
+Focus on distinctive visual attributes: body pose, equipment, setting, motion.
+
+Actions: {batch_str}
+
+Respond ONLY with JSON: {{"action": ["descriptor1", "descriptor2", ...]}}"""
+        try:
+            response, usage = cupl_client.call(prompt, json_mode=True)
+            descs = json_mod.loads(response)
+            for cn in batch:
+                found = None
+                for key in descs:
+                    if cn.lower().strip() in key.lower():
+                        found = descs[key]
+                        break
+                if found and isinstance(found, list):
+                    # Ensure DCLIP format
+                    formatted = []
+                    for d in found:
+                        if cn.lower() not in d.lower():
+                            d = f"{cn.lower()} which has {d}"
+                        formatted.append(d)
+                    dclip_descriptions[cn] = formatted
+                else:
+                    dclip_descriptions[cn] = [f"a photo of a person {cn.lower()}"]
+        except Exception:
+            for cn in batch:
+                dclip_descriptions[cn] = [f"a photo of a person {cn.lower()}"]
+    
+    dclip_prompts = {"prompts_per_class": {}}
+    for cn in class_names:
+        descs = dclip_descriptions.get(cn, [f"a photo of a person {cn.lower()}"])
+        dclip_prompts["prompts_per_class"][cn] = {
+            "prompts": descs, "weights": [1.0/len(descs)] * len(descs)
+        }
+    dclip_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        dclip_prompts, args.device, class_names
+    )
+    print(f"  DCLIP:              {dclip_acc:.4f}")
+    baselines["dclip"] = float(dclip_acc)
+    
+    # CLIP-Enhance: synonym expansion + descriptions
+    print(f"\n--- CLIP-Enhance baseline ---")
+    enhance_descriptions = {}
+    for i in range(0, len(class_names), 10):
+        batch = class_names[i:i+10]
+        batch_str = ", ".join(batch)
+        prompt = f"""For each action, provide:
+1. 3 synonyms or alternative names for the action
+2. 5 visual descriptions of how it appears in a photo
+
+Actions: {batch_str}
+
+Return JSON: {{"action": {{"synonyms": ["syn1", ...], "descriptions": ["desc1", ...]}}}}
+Return ONLY valid JSON."""
+        try:
+            response, usage = cupl_client.call(prompt, json_mode=True)
+            descs = json_mod.loads(response)
+            for cn in batch:
+                found = None
+                for key in descs:
+                    if cn.lower().strip() in key.lower():
+                        found = descs[key]
+                        break
+                if found and isinstance(found, dict):
+                    syns = found.get("synonyms", [])
+                    vis = found.get("descriptions", [])
+                    all_prompts = [f"a photo of a person {cn.lower()}"]
+                    for s in syns:
+                        all_prompts.append(f"a photo of a person {s.lower()}")
+                    all_prompts.extend(vis)
+                    enhance_descriptions[cn] = all_prompts
+                else:
+                    enhance_descriptions[cn] = [f"a photo of a person {cn.lower()}"]
+        except Exception:
+            for cn in batch:
+                enhance_descriptions[cn] = [f"a photo of a person {cn.lower()}"]
+    
+    enhance_prompts = {"prompts_per_class": {}}
+    for cn in class_names:
+        descs = enhance_descriptions.get(cn, [f"a photo of a person {cn.lower()}"])
+        enhance_prompts["prompts_per_class"][cn] = {
+            "prompts": descs, "weights": [1.0/len(descs)] * len(descs)
+        }
+    enhance_acc = zero_shot_classify_weighted(
+        model, tokenizer, test_features, labels,
+        enhance_prompts, args.device, class_names
+    )
+    print(f"  CLIP-Enhance:       {enhance_acc:.4f}")
+    baselines["clip_enhance"] = float(enhance_acc)
+    
+    print(f"\n  Summary:")
+    for name, acc in sorted(baselines.items(), key=lambda x: x[1], reverse=True):
+        print(f"    {name:<25} {acc:.4f}")
+    
     # ── 2. LLM descriptions ──────────────────────────────────────
     print(f"\n--- Generating action descriptions ({args.llm}) ---")
     descriptions, desc_cost = generate_action_descriptions(
@@ -522,6 +850,7 @@ def main():
         "n_samples": len(labels),
         "llm": args.llm,
         "templates_accuracy": float(templates_acc),
+        "baselines": baselines,
         "description_cost": float(desc_cost),
         "weights": [],
     }
