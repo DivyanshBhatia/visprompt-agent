@@ -54,7 +54,7 @@ def slac_describe_image(client, image_b64, model="gpt-4o-mini"):
         max_tokens=100,
         temperature=0.0,
     )
-    return response.choices[0].message.content.strip()
+    return response.choices[0].message.content.strip(), response
 
 
 def tlac_classify_image(client, image_b64, class_names, model="gpt-4o-mini"):
@@ -74,8 +74,7 @@ def tlac_classify_image(client, image_b64, class_names, model="gpt-4o-mini"):
         max_tokens=50,
         temperature=0.0,
     )
-    return response.choices[0].message.content.strip()
-
+    return response.choices[0].message.content.strip(), response
 
 def main():
     parser = argparse.ArgumentParser(description="TLAC/SLAC baseline")
@@ -161,6 +160,20 @@ def main():
     elif args.dataset == "caltech101":
         images, labels = _load_pil_dataset("Caltech101", args, split=None,
                                            dataset_kwargs={})
+    elif args.dataset == "country211":
+        images, labels = _load_pil_dataset("Country211", args, split="test",
+                                           dataset_kwargs={"split": "test"})
+    elif args.dataset == "ucf101":
+        from scripts.run_action_recognition import (
+            load_ucf101_frames, UCF101_CLASSES
+        )
+        if not args.data_dir:
+            raise ValueError("UCF-101 requires --data-dir pointing to the test folder")
+        images, labels, _ = load_ucf101_frames(
+            args.data_dir, split_file=None, max_per_class=None
+        )
+        # Override class_names from action recognition module
+        class_names = UCF101_CLASSES
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
 
@@ -181,13 +194,18 @@ def main():
     print(f"  Dataset: {args.dataset}, {n_images} images, {len(class_names)} classes")
     
     # Estimate cost
-    # gpt-4o-mini with low detail: ~$0.00015 per image
-    # gpt-4o with low detail: ~$0.0005 per image  
-    cost_per_image = 0.00015 if "mini" in args.lmm_model else 0.0005
-    est_cost = n_images * cost_per_image
-    if args.mode == "both":
-        est_cost *= 2
-    print(f"  Estimated API cost: ${est_cost:.2f}")
+    # GPT-4o pricing per 1M tokens
+    INPUT_COST_PER_M = 2.50
+    OUTPUT_COST_PER_M = 10.00
+    
+    def calc_cost(response):
+        """Calculate actual cost from API response usage."""
+        usage = response.usage
+        input_cost = (usage.prompt_tokens / 1_000_000) * INPUT_COST_PER_M
+        output_cost = (usage.completion_tokens / 1_000_000) * OUTPUT_COST_PER_M
+        return input_cost + output_cost
+
+    print(f"  (Cost will be computed from actual API usage)")
     
     results = {
         "dataset": args.dataset,
@@ -222,7 +240,7 @@ def main():
         for i, img in enumerate(images):
             try:
                 img_b64 = encode_image_to_base64(img)
-                description = slac_describe_image(client, img_b64, args.lmm_model)
+                description, resp = slac_describe_image(client, img_b64, args.lmm_model)
                 
                 # Encode description with CLIP
                 with torch.no_grad():
@@ -237,7 +255,7 @@ def main():
                 if pred == labels[i]:
                     slac_correct += 1
                 slac_total += 1
-                slac_cost += cost_per_image
+                slac_cost += calc_cost(resp)
                 
                 if (i + 1) % 100 == 0 or i == n_images - 1:
                     acc = slac_correct / slac_total
@@ -251,9 +269,11 @@ def main():
                 time.sleep(1)
         
         slac_acc = slac_correct / slac_total
-        print(f"\n  SLAC Final: {slac_acc:.4f} ({slac_correct}/{slac_total}), cost: ${slac_cost:.2f}")
+        cost_per_img = slac_cost / slac_total if slac_total > 0 else 0
+        print(f"\n  SLAC Final: {slac_acc:.4f} ({slac_correct}/{slac_total}), cost: ${slac_cost:.4f} (${cost_per_img:.6f}/image)")
         results["slac_accuracy"] = float(slac_acc)
         results["slac_cost"] = float(slac_cost)
+        results["slac_cost_per_image"] = float(cost_per_img)
 
     # ── TLAC: Direct class selection ──────────────────────────────
     if args.mode in ["tlac", "both"]:
@@ -266,7 +286,7 @@ def main():
         for i, img in enumerate(images):
             try:
                 img_b64 = encode_image_to_base64(img)
-                prediction = tlac_classify_image(client, img_b64, class_names, args.lmm_model)
+                prediction, resp = tlac_classify_image(client, img_b64, class_names, args.lmm_model)
                 
                 # Match prediction to class name (fuzzy)
                 pred_lower = prediction.lower().strip().strip('"').strip("'")
@@ -291,7 +311,7 @@ def main():
                 if pred_idx == labels[i]:
                     tlac_correct += 1
                 tlac_total += 1
-                tlac_cost += cost_per_image
+                tlac_cost += calc_cost(resp)
                 
                 if (i + 1) % 100 == 0 or i == n_images - 1:
                     acc = tlac_correct / tlac_total
@@ -305,9 +325,11 @@ def main():
                 time.sleep(1)
         
         tlac_acc = tlac_correct / tlac_total
-        print(f"\n  TLAC Final: {tlac_acc:.4f} ({tlac_correct}/{tlac_total}), cost: ${tlac_cost:.2f}")
+        cost_per_img = tlac_cost / tlac_total if tlac_total > 0 else 0
+        print(f"\n  TLAC Final: {tlac_acc:.4f} ({tlac_correct}/{tlac_total}), cost: ${tlac_cost:.4f} (${cost_per_img:.6f}/image)")
         results["tlac_accuracy"] = float(tlac_acc)
         results["tlac_cost"] = float(tlac_cost)
+        results["tlac_cost_per_image"] = float(cost_per_img)
 
     # Save
     output_dir = Path(args.output_dir)
