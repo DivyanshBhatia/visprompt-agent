@@ -118,9 +118,11 @@ def main():
     print(f"  LMM: {args.lmm_model}, CLIP: {args.clip_model}")
     print(f"{'='*65}")
 
-    # Load task spec for class names
-    task_spec = build_task_spec(args)
-    class_names = task_spec.class_names
+    # Load task spec for class names (skip for ucf101 which has its own loader)
+    class_names = None
+    if args.dataset != "ucf101":
+        task_spec = build_task_spec(args)
+        class_names = task_spec.class_names
 
     # Load images directly
     if args.dataset == "cifar100":
