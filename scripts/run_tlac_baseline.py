@@ -82,8 +82,8 @@ def main():
     parser.add_argument("--dataset", type=str, default="flowers102")
     parser.add_argument("--clip-model", type=str, default="ViT-L/14")
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--lmm-model", type=str, default="gpt-4o-mini",
-                        help="Vision LMM model (gpt-4o-mini, gpt-4o, gemini-2.0-flash)")
+    parser.add_argument("--lmm-model", type=str, default="gpt-4o",
+                        help="Vision LMM model (gpt-4o, gpt-4o-mini, gemini-2.0-flash)")
     parser.add_argument("--max-images", type=int, default=None,
                         help="Limit images for cost control")
     parser.add_argument("--mode", type=str, default="both", choices=["slac", "tlac", "both"])
@@ -122,8 +122,12 @@ def main():
     # Load dataset
     task_spec = build_task_spec(args)
     class_names = task_spec.class_names
-    images = task_spec.images  # numpy arrays
-    labels = task_spec.labels
+    
+    # Access internal data
+    if task_spec._images is None:
+        task_spec.load_data()
+    images = task_spec._images  # numpy arrays
+    labels = task_spec._labels
 
     if args.max_images and args.max_images < len(images):
         # Stratified subsample
@@ -143,8 +147,8 @@ def main():
     
     # Estimate cost
     # gpt-4o-mini with low detail: ~$0.00015 per image
-    # gpt-4o with low detail: ~$0.001 per image
-    cost_per_image = 0.00015 if "mini" in args.lmm_model else 0.001
+    # gpt-4o with low detail: ~$0.0005 per image  
+    cost_per_image = 0.00015 if "mini" in args.lmm_model else 0.0005
     est_cost = n_images * cost_per_image
     if args.mode == "both":
         est_cost *= 2
