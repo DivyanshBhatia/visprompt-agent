@@ -110,24 +110,59 @@ def main():
     from openai import OpenAI
     import torch
     import open_clip
-    from scripts.run import build_task_spec
+    from scripts.run import build_task_spec, _load_pil_dataset
 
     client = OpenAI()
 
     print(f"\n{'='*65}")
-    print(f"  TLAC/SLAC BASELINE — {args.dataset.upper()}")
+    print(f"  TLAC BASELINE — {args.dataset.upper()}")
     print(f"  LMM: {args.lmm_model}, CLIP: {args.clip_model}")
     print(f"{'='*65}")
 
-    # Load dataset
+    # Load task spec for class names
     task_spec = build_task_spec(args)
     class_names = task_spec.class_names
-    
-    # Access internal data
-    if task_spec._images is None:
-        task_spec.load_data()
-    images = task_spec._images  # numpy arrays
-    labels = task_spec._labels
+
+    # Load images directly
+    if args.dataset == "cifar100":
+        import torchvision
+        dataset = torchvision.datasets.CIFAR100(
+            root=args.data_dir or "./data", train=False, download=True)
+        n_val = min(args.val_size or 10000, len(dataset))
+        indices = np.random.RandomState(42).permutation(len(dataset))[:n_val]
+        images = np.array(dataset.data)[indices]
+        labels = np.array(dataset.targets)[indices]
+    elif args.dataset == "cifar10":
+        import torchvision
+        dataset = torchvision.datasets.CIFAR10(
+            root=args.data_dir or "./data", train=False, download=True)
+        n_val = min(args.val_size or 10000, len(dataset))
+        indices = np.random.RandomState(42).permutation(len(dataset))[:n_val]
+        images = np.array(dataset.data)[indices]
+        labels = np.array(dataset.targets)[indices]
+    elif args.dataset == "flowers102":
+        images, labels = _load_pil_dataset("Flowers102", args, split="test",
+                                           dataset_kwargs={"split": "test"})
+    elif args.dataset == "dtd":
+        images, labels = _load_pil_dataset("DTD", args, split="test",
+                                           dataset_kwargs={"split": "test"})
+    elif args.dataset == "oxford_pets":
+        images, labels = _load_pil_dataset("OxfordIIITPet", args, split="test",
+                                           dataset_kwargs={"split": "test"})
+    elif args.dataset == "food101":
+        images, labels = _load_pil_dataset("Food101", args, split="test",
+                                           dataset_kwargs={"split": "test"})
+    elif args.dataset == "eurosat":
+        images, labels = _load_pil_dataset("EuroSAT", args, split=None,
+                                           dataset_kwargs={})
+    elif args.dataset == "fgvc_aircraft":
+        images, labels = _load_pil_dataset("FGVCAircraft", args, split="test",
+                                           dataset_kwargs={"split": "test"})
+    elif args.dataset == "caltech101":
+        images, labels = _load_pil_dataset("Caltech101", args, split=None,
+                                           dataset_kwargs={})
+    else:
+        raise ValueError(f"Unknown dataset: {args.dataset}")
 
     if args.max_images and args.max_images < len(images):
         # Stratified subsample
