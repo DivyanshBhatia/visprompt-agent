@@ -84,9 +84,8 @@ def get_imagenet_classnames():
 
 
 def download_imagenet_classnames():
-    """Download ImageNet class names from OpenAI CLIP repo."""
+    """Download ImageNet class names from reliable sources."""
     import urllib.request
-    url = "https://raw.githubusercontent.com/openai/CLIP/main/notebooks/imagenet_classes.txt"
     classnames_dir = Path(__file__).parent.parent / "data"
     classnames_dir.mkdir(exist_ok=True)
     classnames_file = classnames_dir / "imagenet_classnames.json"
@@ -95,21 +94,41 @@ def download_imagenet_classnames():
         with open(classnames_file) as f:
             return json.load(f)
     
-    print("Downloading ImageNet class names from OpenAI CLIP repo...")
-    try:
-        response = urllib.request.urlopen(url)
-        text = response.read().decode('utf-8')
-        classnames = [line.strip() for line in text.strip().split('\n') if line.strip()]
-        
-        with open(classnames_file, 'w') as f:
-            json.dump(classnames, f, indent=2)
-        
-        print(f"  Saved {len(classnames)} class names to {classnames_file}")
-        return classnames
-    except Exception as e:
-        print(f"  Failed to download: {e}")
-        print("  Please provide ImageNet class names manually.")
-        return None
+    # Try multiple sources
+    urls = [
+        "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json",
+        "https://raw.githubusercontent.com/openai/CLIP/main/notebooks/imagenet_classes.txt",
+        "https://raw.githubusercontent.com/xmartlabs/caffeflow/master/examples/imagenet/imagenet-classes.txt",
+        "https://storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt",
+    ]
+    
+    for url in urls:
+        try:
+            print(f"  Downloading ImageNet class names from {url.split('/')[2]}...")
+            response = urllib.request.urlopen(url, timeout=10)
+            text = response.read().decode('utf-8')
+            
+            if url.endswith('.json'):
+                classnames = json.loads(text)
+            elif url.endswith('.txt'):
+                lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
+                # TF labels file has "background" as first entry
+                if lines[0].lower() == 'background':
+                    lines = lines[1:]
+                classnames = lines[:1000]
+            
+            if len(classnames) == 1000:
+                with open(classnames_file, 'w') as f:
+                    json.dump(classnames, f, indent=2)
+                print(f"  Saved {len(classnames)} class names")
+                return classnames
+        except Exception as e:
+            print(f"  Failed: {e}")
+            continue
+    
+    print("  WARNING: Could not download ImageNet class names from any source.")
+    print("  Using numeric labels (0-999). Results will be invalid.")
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════
