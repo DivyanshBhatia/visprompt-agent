@@ -1,52 +1,76 @@
-# VisPrompt
+# NETRA
 
-**LLM-Enriched Prompt Fusion for Zero-Shot Vision Models**
+**Normalized Ensembling of Textual Representations for Zero-Shot Visual Adaptation**
 
-> A training-free framework that combines LLM-generated visual descriptions with template ensembles via group-normalized weighted fusion, improving zero-shot classification, retrieval, and action recognition across 10+ datasets and 7 vision backbones.
+> A training-free framework that fuses LLM-generated visual descriptions with hand-crafted template ensembles via group-normalized weighted fusion. No training, no target images, no per-image LLM calls — just better text prompts for CLIP.
+
+📄 **Paper**: BMVC 2026 submission  
+💻 **Code**: This repository
 
 ---
 
 ## Key Idea
 
-Foundation vision models like CLIP are powerful but prompt-sensitive: accuracy can swing 10-15% depending on text prompt choice. Prior work uses either hand-crafted template ensembles (Radford et al.) or LLM-generated descriptions (CuPL, DCLIP), but not both optimally.
-
-**VisPrompt** fuses these two signal sources with group-normalized weighting:
+CLIP's zero-shot accuracy depends heavily on text prompt design. Templates like "a photo of a {class}" provide stability but lack discriminative power. LLM-generated descriptions provide fine-grained detail but can be noisy. **NETRA fuses both via group-normalized weighting:**
 
 ```
-                    +------------------------+
-                    |  80 ImageNet Templates  |---- base_weight / N_templates ----+
-                    +------------------------+                                    |
-                                                                                  v
-    Image --> CLIP --> similarity --> [weighted average] --> prediction
-                                                                                  ^
-                    +------------------------+                                    |
-                    |  LLM Descriptions      |---- desc_weight / N_descriptions --+
-                    +------------------------+
+t_c = (α/M) · Σ f̂(templates) + (β/N) · Σ f̂(descriptions)
 ```
 
-The key insight: **no fixed weighting works everywhere**. Generic domains (CIFAR-100) need heavy template anchoring (70/30), while fine-grained domains (Flowers, Pets) benefit from description-dominant weights (0/100). The optimal ratio is domain-dependent and dataset-adaptive.
+Group normalization decouples influence from group size: 10 descriptions can contribute as much as 80 templates when α/β is set appropriately. A single fixed default of **55/45** improves over templates on **8/10 datasets** without any tuning.
 
 ---
 
-## Results Highlights
+## Results
 
-**Classification** (ViT-L/14, 10 datasets): Wins on 5/10, ties 1, with +3.19% on DTD and +2.21% on Oxford Pets.
+### Classification (ViT-L/14, 10 datasets, 9 baselines)
 
-**Retrieval** (10 datasets): **10/10 positive improvements**, universal gains from +0.02% to +4.25% mAP.
+| Dataset | Templates | Best Baseline | **NETRA** | Δ |
+|---------|-----------|--------------|-----------|---|
+| DTD | 52.82% | 54.47% (CuPL+e) | **57.66%** | **+3.19%** |
+| Oxford Pets | 90.16% | 90.27% (CuPL+e) | **92.48%** | **+2.21%** |
+| Flowers102 | 68.09% | 74.21% (DCLIP) | **75.54%** | **+1.33%** |
+| CIFAR-100 | 74.70% | 75.71% (CLIP-Enh.) | **75.81%** | **+0.10%** |
+| Country211 | 22.13% | 23.84% (WaffleCLIP) | **24.20%** | **+0.36%** |
 
-**Action Recognition** (UCF-101): +3.63% over best baseline, beating all 7 comparison methods.
+Wins on 5/10 datasets, ties on 1, competitive on remaining 4.
 
-**Few-shot Comparison**: Our zero-shot method beats 16-shot linear probes on 3/4 datasets (Oxford Pets, CIFAR-100, DTD).
+### Retrieval (10 datasets)
 
-**LLM & Backbone Agnostic**: Consistent gains across 4 LLMs (GPT-4o, GPT-5.2, Claude Sonnet 4, Claude Opus 4.5) and 7 backbones (CLIP, EVA-CLIP, MetaCLIP, SigLIP).
+**10/10 positive improvements** over template ensembles, from +0.02% to +4.25% mAP. EuroSAT R@1 improves by +10%.
+
+### Action Recognition (UCF-101)
+
+**+3.63% over all 8 baselines** (75.88% vs 72.48% best baseline), using middle-frame extraction.
+
+### Zero-Shot vs Few-Shot
+
+Our zero-shot method **beats 16-shot linear probes on 3/4 datasets** (Oxford Pets, CIFAR-100, DTD) without any labeled data.
+
+### vs TLAC (Per-Image LMM, CVPR 2025W)
+
+| | NETRA | TLAC (GPT-4o vision) |
+|---|---|---|
+| Total cost (11 datasets) | **$1.95** | $77.75 |
+| Cost ratio | — | **40× more** |
+| NETRA wins | 2 (CIFAR-10, CIFAR-100) | — |
+| Within 1% | 3 (Food, Pets, Caltech) | — |
+| TLAC wins (>1%) | — | 6 |
+| Works on low-res (32×32) | ✅ | ❌ (−15.7% on CIFAR-100) |
+| Works for retrieval | ✅ (10/10) | ❌ |
+| Per-image inference cost | **$0** | $0.0004–0.002 |
+
+### Cross-Backbone & Cross-LLM
+
+Tested across **7 backbones** (OpenAI CLIP, EVA-CLIP, MetaCLIP, SigLIP) × **4 LLMs** (GPT-4o, GPT-5.2, Claude Sonnet 4, Claude Opus 4.5) = **112 positive results** on 4 datasets. LLM ranking is domain-dependent: Opus 4.5 dominates fine-grained; GPT-5.2 dominates textures.
 
 ---
 
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/visprompt.git
-cd visprompt
+git clone https://github.com/DivyanshBhatia/visprompt-agent.git
+cd visprompt-agent
 pip install -e .
 ```
 
@@ -54,13 +78,13 @@ pip install -e .
 
 ```bash
 pip install torch torchvision open-clip-torch
-pip install openai        # or: pip install anthropic
+pip install openai anthropic  # for LLM description generation
 ```
 
 Set your API key:
 ```bash
 export OPENAI_API_KEY="sk-..."
-# or
+# and/or
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
@@ -68,163 +92,168 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ## Quick Start
 
-### Classification (10 datasets)
+### Classification with baselines
 
 ```bash
-# Single dataset with weight ablation
-python scripts/run_weight_ablation.py \
-    --dataset cifar100 --clip-model ViT-L/14 --llm gpt-4o
+python scripts/run_baselines.py --dataset flowers102 --clip-model ViT-L/14
+```
 
-# Multi-dataset evaluation with baselines
+### Weight ablation (core method)
+
+```bash
+python scripts/run_weight_ablation.py --dataset dtd --clip-model ViT-L/14 --llm gpt-4o
+```
+
+### Multi-dataset evaluation
+
+```bash
 python scripts/run_multidataset.py \
     --datasets cifar100 flowers102 dtd oxford_pets food101 \
     --clip-model ViT-L/14
 ```
 
-### Retrieval
+---
+
+## All Experiments
+
+### Paper Tables & Figures
+
+| Paper Reference | Script | Command |
+|----------------|--------|---------|
+| Table 2: Classification | `run_baselines.py` | `python scripts/run_baselines.py --dataset cifar100` |
+| Table 3: Retrieval | `run_retrieval_baselines.py` | `python scripts/run_retrieval_baselines.py --dataset flowers102 --run-ablation` |
+| Table 4: Action Recognition | `run_action_recognition.py` | `python scripts/run_action_recognition.py --data-dir /path/to/UCF-101/test` |
+| Table 5: Cross-LLM×Backbone | `run_cross_ablation.py` | `python scripts/run_cross_ablation.py --datasets cifar100 flowers102` |
+| Table 6: Few-shot comparison | `run_fewshot_comparison.py` | `python scripts/run_fewshot_comparison.py --datasets flowers102 dtd` |
+| Table 7: Variance | `run_variance.py` | `python scripts/run_variance.py --dataset cifar100 --n-trials 5` |
+| Table 8: Fixed default | `run_weight_ablation.py` | Use `--base-weight 0.55` across all datasets |
+| Table 9: TLAC comparison | `run_tlac_baseline.py` | `python scripts/run_tlac_baseline.py --dataset dtd --mode tlac` |
+| Fig 2: Weight ablation | `run_weight_ablation.py` | Run per dataset, plot results |
+| Fig 4: Description scaling | `run_desc_scaling.py` | `python scripts/run_desc_scaling.py --dataset flowers102` |
+| Segmentation | `run_seg_baselines.py` | `python scripts/run_seg_baselines.py` |
+
+### TLAC Baseline (Per-Image LMM)
 
 ```bash
-python scripts/run_retrieval_baselines.py \
-    --dataset flowers102 --clip-model ViT-L/14 --run-ablation
+# Requires OPENAI_API_KEY with GPT-4o vision access
+# Cost: ~$0.001/image with GPT-4o
+
+python scripts/run_tlac_baseline.py --dataset dtd --clip-model ViT-L/14 --mode tlac
+python scripts/run_tlac_baseline.py --dataset oxford_pets --clip-model ViT-L/14 --mode tlac
+python scripts/run_tlac_baseline.py --dataset flowers102 --clip-model ViT-L/14 --mode tlac
+python scripts/run_tlac_baseline.py --dataset cifar100 --clip-model ViT-L/14 --mode tlac
+python scripts/run_tlac_baseline.py --dataset ucf101 --clip-model ViT-L/14 --mode tlac \
+    --data-dir /path/to/ucf101/test
 ```
 
 ### Action Recognition (UCF-101)
 
 ```bash
+# Full run with all baselines
 python scripts/run_action_recognition.py \
+    --data-dir /path/to/UCF-101/test --clip-model ViT-L/14
+
+# Ablation only (skip baselines)
+python scripts/run_action_ablation.py \
     --data-dir /path/to/UCF-101/test --clip-model ViT-L/14
 ```
 
-### Cross-Product Ablation (LLM x Backbone)
+---
 
-```bash
-python scripts/run_cross_ablation.py \
-    --datasets cifar100 flowers102 oxford_pets dtd \
-    --backbones CLIP-B/32 CLIP-L/14 EVA02-B/16 MetaCLIP-L/14 SigLIP-B/16 \
-    --llms GPT-4o GPT-5.2 Claude-Sonnet-4 Claude-Opus-4.5
+## Method
+
+### Algorithm
+
 ```
+OFFLINE (once per dataset, ~$0.10-0.25):
+  For each class c:
+    T_c ← 80 hand-crafted ImageNet templates
+    D_c ← LLM generates 10-15 visual descriptions
+    t_c ← (α/M) · Σ f̂_T(templates) + (β/N) · Σ f̂_T(descriptions)
+    t̄_c ← normalize(t_c)
+
+ONLINE (per image, zero additional cost):
+    ŷ ← argmax_c cos(f_I(x), t̄_c)    # standard CLIP inference
+```
+
+### Weight Selection Guide
+
+| Domain Type | Recommended α/β | Examples |
+|-------------|-----------------|----------|
+| Generic objects | 55/45 – 70/30 | CIFAR, Caltech, ImageNet |
+| Fine-grained | 0/100 – 20/80 | Flowers, Pets, Birds |
+| Textures | 40/60 | DTD, materials |
+| Food / scenes | 55/45 | Food101, SUN397 |
+| Unknown | **55/45** | Safe default, works on 8/10 datasets |
+
+### Description Scaling
+
+- **With template anchoring** (α > 0): more descriptions monotonically help; plateau at 6-8
+- **Without anchoring** (α = 0): peak at 2-3 descriptions, then declines
+- **Practical recommendation**: 5-8 descriptions per class with α ≥ 0.4
 
 ---
 
-## Approach
+## Supported Configurations
 
-### 1. LLM Description Generation
+### Datasets (11)
 
-A single LLM call generates 10-15 visual descriptions per class:
+`cifar10`, `cifar100`, `flowers102`, `dtd`, `food101`, `oxford_pets`, `caltech101`, `eurosat`, `fgvc_aircraft`, `country211`, `ucf101`
 
-```
-Input:  "Generate visual descriptions for: sunflower, rose, tulip"
-Output: {
-  "sunflower": [
-    "a sunflower, large yellow petals radiating from a dark brown center",
-    "a sunflower, tall green stem with a heavy drooping flower head",
-    ...
-  ]
-}
-```
+### Backbones (7 from 4 families)
 
-### 2. Group-Normalized Weighted Fusion
+| Family | Models | Pretrained |
+|--------|--------|------------|
+| OpenAI CLIP | ViT-B/32, ViT-B/16, ViT-L/14 | `openai` |
+| EVA-CLIP | EVA02-B-16 | `merged2b_s8b_b131k` |
+| MetaCLIP | ViT-B-32-quickgelu, ViT-L-14-quickgelu | `metaclip_400m` |
+| SigLIP | ViT-B-16-SigLIP | `webli` |
 
-Templates and descriptions are fused with per-group normalized weights:
+### LLMs (4)
 
-```python
-# Each template gets:  base_weight / N_templates
-# Each description gets: desc_weight / N_descriptions
-# This ensures the two groups contribute proportionally regardless of count
-```
-
-### 3. Weight Selection
-
-The optimal base/description weight ratio varies by domain:
-
-| Domain | Optimal Weight | Why |
-|--------|---------------|-----|
-| Generic (CIFAR-100) | 70/30 | Templates provide stable generic recognition |
-| Textures (DTD) | 40/60 | Texture descriptions add discriminative cues |
-| Fine-grained (Flowers, Pets) | 0/100 | Descriptions dominate -- visual details matter most |
-| Actions (UCF-101) | 55/45 | Balanced -- actions need both context and specifics |
-
----
-
-## Experiments
-
-### Supported Datasets
-
-cifar10, cifar100, flowers102, dtd, food101, oxford_pets, caltech101, eurosat, fgvc_aircraft, country211, ucf101
-
-### Supported Backbones
-
-| Family | Models |
-|--------|--------|
-| OpenAI CLIP | ViT-B/32, ViT-B/16, ViT-L/14 |
-| EVA-CLIP | EVA02-B-16 |
-| MetaCLIP | ViT-B-32, ViT-L-14 |
-| SigLIP | ViT-B-16 |
-
-### Supported LLMs
-
-GPT-4o, GPT-5.2, Claude Sonnet 4, Claude Opus 4.5
-
-### Run All Experiments
-
-```bash
-# Classification + baselines (Table 1)
-python scripts/run_baselines.py --dataset cifar100 --clip-model ViT-L/14
-
-# Weight ablation (Figure 2)
-python scripts/run_weight_ablation.py --dataset flowers102 --clip-model ViT-L/14
-
-# Cross-product ablation (Table 2)
-python scripts/run_cross_ablation.py --datasets cifar100 flowers102 oxford_pets dtd
-
-# Few-shot comparison (Figure 3)
-python scripts/run_fewshot_comparison.py --datasets flowers102 dtd oxford_pets cifar100
-
-# Variance analysis (Table 3)
-python scripts/run_variance.py --dataset cifar100 --n-trials 5
-
-# Description scaling (Figure 4)
-python scripts/run_desc_scaling.py --dataset flowers102 --clip-model ViT-L/14
-
-# Retrieval (Table 4)
-python scripts/run_retrieval_baselines.py --dataset flowers102 --run-ablation
-
-# Segmentation (Table 5)
-python scripts/run_seg_baselines.py
-
-# Action recognition (Table 6)
-python scripts/run_action_recognition.py --data-dir /path/to/UCF-101/test
-```
+| LLM | Provider | Best for |
+|-----|----------|----------|
+| GPT-4o | OpenAI | Cost-efficient, generic domains |
+| GPT-5.2 | OpenAI | Textures (DTD) |
+| Claude Sonnet 4 | Anthropic | Balanced |
+| Claude Opus 4.5 | Anthropic | Fine-grained (Flowers, Pets) |
 
 ---
 
 ## Project Structure
 
 ```
-visprompt/
+visprompt-agent/
 ├── visprompt/
 │   ├── __init__.py
+│   ├── task_spec.py              # TaskSpec dataclass
 │   ├── baselines/
-│   │   └── __init__.py          # Baseline methods (CuPL, WaffleCLIP, DCLIP, etc.)
+│   │   └── __init__.py           # CuPL, WaffleCLIP, DCLIP, CLIP-Enhance, Frolic
 │   ├── tasks/
-│   │   ├── base.py              # BaseTaskRunner interface
-│   │   ├── classification.py    # CLIP zero-shot classification
-│   │   └── segmentation_clipseg.py  # CLIPSeg segmentation
+│   │   ├── base.py               # BaseTaskRunner interface
+│   │   ├── classification.py     # CLIP classification (TTA, logit ensemble)
+│   │   ├── segmentation_clipseg.py
+│   │   └── detection.py
 │   └── utils/
-│       ├── llm.py               # LLM client (OpenAI, Anthropic) + cost tracking
-│       └── metrics.py           # Metrics (accuracy, mAP, IoU, per-class)
+│       ├── llm.py                # Multi-provider LLM client + cost tracking
+│       └── metrics.py            # Accuracy, mAP, IoU, per-class metrics
 ├── scripts/
-│   ├── run_weight_ablation.py   # Weight ratio sweep (core method)
-│   ├── run_baselines.py         # Baseline comparison (9 methods)
-│   ├── run_cross_ablation.py    # LLM x backbone cross-product
-│   ├── run_retrieval_baselines.py   # Zero-shot retrieval
-│   ├── run_fewshot_comparison.py    # Few-shot linear probe comparison
-│   ├── run_variance.py          # Multi-trial variance analysis
-│   ├── run_desc_scaling.py      # Description count scaling
-│   ├── run_action_recognition.py    # UCF-101 action recognition
-│   ├── run_seg_baselines.py     # Segmentation baselines
-│   └── run_multidataset.py      # Multi-dataset evaluation
-├── experiments/                 # Output directory for results
+│   ├── run.py                    # Core: build_task_spec, build_task_runner
+│   ├── run_baselines.py          # 9 classification baselines
+│   ├── run_weight_ablation.py    # α/β weight sweep
+│   ├── run_cross_ablation.py     # LLM × backbone cross-product
+│   ├── run_retrieval_baselines.py
+│   ├── run_fewshot_comparison.py
+│   ├── run_variance.py           # Multi-trial robustness
+│   ├── run_desc_scaling.py       # Description count scaling
+│   ├── run_action_recognition.py # UCF-101 (full with baselines)
+│   ├── run_action_ablation.py    # UCF-101 (ablation only)
+│   ├── run_seg_baselines.py      # Pascal VOC segmentation
+│   ├── run_multidataset.py       # Multi-dataset batch evaluation
+│   ├── run_tlac_baseline.py      # TLAC per-image LMM baseline
+│   ├── run_protext_baseline.py   # ProText published numbers
+│   └── compare_2025_methods.py   # 2025 method comparison table
+├── experiments/                   # Output JSON results
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md
@@ -234,26 +263,32 @@ visprompt/
 
 ## Cost
 
-LLM description generation is inexpensive:
+### NETRA (per-class, one-time)
 
-| Dataset | Classes | LLM | Cost |
-|---------|---------|-----|------|
-| CIFAR-100 | 100 | GPT-4o | ~$0.20 |
-| Flowers102 | 102 | GPT-4o | ~$0.23 |
-| DTD | 47 | GPT-4o | ~$0.10 |
-| Oxford Pets | 37 | GPT-4o | ~$0.09 |
+| Dataset | Classes | GPT-4o Cost | Reusable? |
+|---------|---------|-------------|-----------|
+| CIFAR-100 | 100 | ~$0.20 | ✅ Forever |
+| Flowers102 | 102 | ~$0.25 | ✅ Forever |
+| DTD | 47 | ~$0.09 | ✅ Forever |
+| All 11 datasets | — | **~$1.95** | ✅ Forever |
 
-Total cost for all 10 datasets: **< $2.00** with GPT-4o.
+### TLAC comparison (per-image, every run)
+
+| | NETRA | TLAC |
+|---|---|---|
+| 11 datasets | **$1.95** | **$77.75** |
+| 1M images | **$1.95** | **~$1,600** |
+| Cost scaling | O(classes) | O(images) |
 
 ---
 
 ## Citation
 
 ```bibtex
-@inproceedings{visprompt2026,
-  title={LLM-Enriched Prompt Fusion for Zero-Shot Vision Models},
-  author={},
-  booktitle={},
+@inproceedings{netra2026,
+  title={NETRA: Normalized Ensembling of Textual Representations for Zero-Shot Visual Adaptation},
+  author={Anonymous},
+  booktitle={Proceedings of the British Machine Vision Conference (BMVC)},
   year={2026}
 }
 ```

@@ -336,6 +336,144 @@ def main():
           f"R@5: {metrics['R@5']:.4f}, R@10: {metrics['R@10']:.4f}  ({time.time()-t0:.1f}s)")
     results["cupl_ensemble"] = metrics
 
+    # ── Baseline 6: WaffleCLIP (random word descriptors) ──────────────
+    print(f"\n--- Baseline 6: WaffleCLIP ---")
+    import random
+    random.seed(42)
+    random_words = [
+        "bright", "dark", "colorful", "textured", "smooth", "rough",
+        "large", "small", "round", "angular", "metallic", "wooden",
+        "organic", "geometric", "striped", "spotted", "furry", "scaly",
+        "shiny", "matte", "transparent", "opaque", "symmetric", "curved",
+        "flat", "tall", "wide", "narrow", "detailed", "simple",
+        "natural", "artificial", "indoor", "outdoor", "urban", "rural",
+        "wet", "dry", "soft", "hard", "warm", "cool", "vibrant", "muted",
+        "patterned", "solid", "complex", "elegant", "compact", "sprawling",
+    ]
+    t0 = time.time()
+    ppc = {}
+    for cls in class_names:
+        wps = [f"a photo of a {cls}"]
+        for _ in range(15):
+            n_words = random.randint(2, 5)
+            words = random.sample(random_words, n_words)
+            wps.append(f"a {' '.join(words)} photo of a {cls}")
+        ppc[cls] = {"prompts": wps, "weights": [1.0] * len(wps)}
+    text_emb = encode_text_prompts(task_runner, ppc, class_names)
+    sims = (text_emb @ image_features.T).detach().cpu().numpy()
+    metrics = compute_retrieval_metrics(sims, labels, class_names)
+    print(f"  mAP: {metrics['mAP']:.4f}, R@1: {metrics['R@1']:.4f}, "
+          f"R@5: {metrics['R@5']:.4f}, R@10: {metrics['R@10']:.4f}  ({time.time()-t0:.1f}s)")
+    results["waffle_clip"] = metrics
+
+    # ── Baseline 7: DCLIP (attribute descriptors) ─────────────────────
+    print(f"\n--- Baseline 7: DCLIP ---")
+    t0 = time.time()
+    from visprompt.utils.llm import LLMClient
+    dclip_client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+    dclip_descriptions = {}
+    for i in range(0, len(class_names), 10):
+        batch = class_names[i:i+10]
+        batch_str = ", ".join(batch)
+        prompt = (
+            f"For each category below, describe what it looks like.\n"
+            f"Give 5-8 short visual descriptors per category.\n"
+            f'Format each as: "{{class}} which has {{descriptor}}"\n'
+            f"Focus on distinctive visual attributes: color, shape, texture, parts.\n\n"
+            f"Categories: {batch_str}\n\n"
+            f'Respond ONLY with JSON: {{"category": ["descriptor1", "descriptor2", ...]}}\n'
+        )
+        try:
+            response = dclip_client.call(prompt, json_mode=True)
+            import json as json_mod
+            descs = json_mod.loads(response)
+            for cn in batch:
+                found = None
+                for key in descs:
+                    if cn.lower().strip() in key.lower():
+                        found = descs[key]
+                        break
+                if found and isinstance(found, list):
+                    formatted = []
+                    for d in found:
+                        if cn.lower() not in d.lower():
+                            d = f"{cn} which has {d}"
+                        formatted.append(d)
+                    dclip_descriptions[cn] = formatted
+                else:
+                    dclip_descriptions[cn] = [f"a photo of a {cn}"]
+        except Exception as e:
+            logger.warning(f"  DCLIP batch failed: {e}")
+            for cn in batch:
+                dclip_descriptions[cn] = [f"a photo of a {cn}"]
+
+    ppc = {}
+    for cls in class_names:
+        descs = dclip_descriptions.get(cls, [f"a photo of a {cls}"])
+        ppc[cls] = {"prompts": descs, "weights": [1.0] * len(descs)}
+    text_emb = encode_text_prompts(task_runner, ppc, class_names)
+    sims = (text_emb @ image_features.T).detach().cpu().numpy()
+    metrics = compute_retrieval_metrics(sims, labels, class_names)
+    print(f"  mAP: {metrics['mAP']:.4f}, R@1: {metrics['R@1']:.4f}, "
+          f"R@5: {metrics['R@5']:.4f}, R@10: {metrics['R@10']:.4f}  ({time.time()-t0:.1f}s)")
+    results["dclip"] = metrics
+
+    # ── Baseline 8: CLIP-Enhance (synonym + descriptions) ─────────────
+    print(f"\n--- Baseline 8: CLIP-Enhance ---")
+    t0 = time.time()
+    enhance_descriptions = {}
+    for i in range(0, len(class_names), 10):
+        batch = class_names[i:i+10]
+        batch_str = ", ".join(batch)
+        prompt = (
+            f"For each category, provide:\n"
+            f"1. 3 synonyms or alternative names\n"
+            f"2. 5 visual descriptions of how it appears in a photo\n\n"
+            f"Categories: {batch_str}\n\n"
+            f'Return JSON: {{"category": {{"synonyms": ["syn1", ...], "descriptions": ["desc1", ...]}}}}\n'
+            f"Return ONLY valid JSON."
+        )
+        try:
+            response = dclip_client.call(prompt, json_mode=True)
+            import json as json_mod
+            descs = json_mod.loads(response)
+            for cn in batch:
+                found = None
+                for key in descs:
+                    if cn.lower().strip() in key.lower():
+                        found = descs[key]
+                        break
+                if found and isinstance(found, dict):
+                    syns = found.get("synonyms", [])
+                    vis = found.get("descriptions", [])
+                    all_prompts = [f"a photo of a {cn}"]
+                    for s in syns:
+                        all_prompts.append(f"a photo of a {s}")
+                    all_prompts.extend(vis)
+                    enhance_descriptions[cn] = all_prompts
+                else:
+                    enhance_descriptions[cn] = [f"a photo of a {cn}"]
+        except Exception as e:
+            logger.warning(f"  CLIP-Enhance batch failed: {e}")
+            for cn in batch:
+                enhance_descriptions[cn] = [f"a photo of a {cn}"]
+
+    ppc = {}
+    for cls in class_names:
+        descs = enhance_descriptions.get(cls, [f"a photo of a {cls}"])
+        ppc[cls] = {"prompts": descs, "weights": [1.0] * len(descs)}
+    text_emb = encode_text_prompts(task_runner, ppc, class_names)
+    sims = (text_emb @ image_features.T).detach().cpu().numpy()
+    metrics = compute_retrieval_metrics(sims, labels, class_names)
+    print(f"  mAP: {metrics['mAP']:.4f}, R@1: {metrics['R@1']:.4f}, "
+          f"R@5: {metrics['R@5']:.4f}, R@10: {metrics['R@10']:.4f}  ({time.time()-t0:.1f}s)")
+    results["clip_enhance"] = metrics
+
+    # Note: Frolic uses logit correction which is classification-specific
+    # and does not apply to retrieval (no argmax decision to correct).
+    # We include its prompt construction (templates + descriptions, same as CuPL+e)
+    # but omit the logit correction step.
+
     # ── Summary ───────────────────────────────────────────────────────
     print(f"\n{'='*65}")
     print(f"  RETRIEVAL COMPARISON — {args.dataset}")
@@ -343,7 +481,8 @@ def main():
     print(f"{'Method':<25} {'mAP':>8} {'R@1':>8} {'R@5':>8} {'R@10':>8}")
     print(f"{'-'*60}")
     for name in ["class_name_only", "photo_template", "80_template_ensemble",
-                  "llm_descriptions", "cupl_ensemble"]:
+                  "waffle_clip", "llm_descriptions", "dclip", "clip_enhance",
+                  "cupl_ensemble"]:
         if name in results:
             m = results[name]
             print(f"  {name:<23} {m['mAP']:>8.4f} {m['R@1']:>8.4f} "
