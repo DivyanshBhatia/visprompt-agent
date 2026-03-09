@@ -140,13 +140,15 @@ def load_imagenet(data_dir, val_size=None):
     from torchvision.datasets import ImageFolder
     
     dataset = ImageFolder(data_dir)
-    
-    # Get class names from folder structure
-    # ImageNet folders are wnids (n01440764), we need human-readable names
     classnames = download_imagenet_classnames()
     if classnames is None:
-        # Fallback: use folder names cleaned up
         classnames = [name.replace('_', ' ') for name in dataset.classes]
+    
+    # If folders are numeric, reorder classnames to match lex sort
+    if dataset.classes[0].isdigit():
+        reordered = [classnames[int(f)] for f in dataset.classes]
+        classnames = reordered
+    # If folders are wnids (n01440764), classnames list is already in wnid-sorted order
     
     print(f"  Loaded ImageNet val: {len(dataset)} images, {len(classnames)} classes")
     
@@ -175,6 +177,12 @@ def load_imagenet_v2(data_dir=None, val_size=None):
         classnames = download_imagenet_classnames()
         if classnames is None:
             classnames = [str(i) for i in range(1000)]
+        
+        # Reorder if folders are numeric (ImageFolder sorts lexicographically)
+        if dataset.classes[0].isdigit():
+            reordered = [classnames[int(f)] for f in dataset.classes]
+            classnames = reordered
+        
         print(f"  Loaded ImageNet-V2 from {data_dir}: {len(dataset)} images")
         
         if val_size and val_size < len(dataset):
@@ -236,6 +244,13 @@ def load_imagenet_v2(data_dir=None, val_size=None):
     classnames = download_imagenet_classnames()
     if classnames is None:
         classnames = [str(i) for i in range(1000)]
+    
+    # CRITICAL: ImageFolder sorts folders lexicographically ("0","1","10","100",...)
+    # not numerically (0,1,2,3,...). We must reorder classnames to match.
+    # dataset.classes = ["0","1","10","100","101",...] (lex sorted)
+    # We need classnames[i] = imagenet_classnames[int(dataset.classes[i])]
+    reordered = [classnames[int(folder_name)] for folder_name in dataset.classes]
+    classnames = reordered
     
     print(f"  Loaded ImageNet-V2: {len(dataset)} images, {len(classnames)} classes")
     
