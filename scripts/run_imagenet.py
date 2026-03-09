@@ -640,6 +640,35 @@ def main():
     print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%\n")
     results["80_templates"] = metrics
     
+    # ── Baseline 3.5: WaffleCLIP (no LLM needed) ───────────────────────
+    if not args.skip_baselines:
+        import random
+        random.seed(42)
+        random_words = [
+            "bright", "dark", "colorful", "textured", "smooth", "rough",
+            "large", "small", "round", "angular", "metallic", "wooden",
+            "organic", "geometric", "striped", "spotted", "furry", "scaly",
+            "shiny", "matte", "transparent", "opaque", "symmetric", "curved",
+            "flat", "tall", "wide", "narrow", "detailed", "simple",
+            "natural", "artificial", "indoor", "outdoor", "urban", "rural",
+            "wet", "dry", "soft", "hard", "warm", "cool", "vibrant", "muted",
+            "patterned", "solid", "complex", "elegant", "compact", "sprawling",
+        ]
+        print("--- Baseline: WaffleCLIP ---")
+        ppc = {}
+        for cls in classnames:
+            wps = [f"a photo of a {cls}"]
+            for _ in range(15):
+                n_words = random.randint(2, 5)
+                words = random.sample(random_words, n_words)
+                wps.append(f"a {' '.join(words)} photo of a {cls}")
+            ppc[cls] = {"prompts": wps, "weights": [1.0] * len(wps)}
+        class_emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
+        metrics = evaluate_accuracy(image_features, labels, class_emb)
+        print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%  "
+              f"Δ: {(metrics['top1']-baseline_top1)*100:+.2f}%\n")
+        results["waffle_clip"] = metrics
+    
     # ── Generate descriptions ─────────────────────────────────────────
     print("--- Generating LLM descriptions ---")
     descriptions, desc_cost = generate_descriptions(classnames, args.llm, args.llm_provider)
@@ -647,15 +676,171 @@ def main():
     print(f"  {n_with_desc}/{n_classes} classes with descriptions "
           f"(cost: ${desc_cost.get('total_cost_usd', 0):.4f})\n")
     
-    # ── Baseline 4: CuPL+e (uniform weight) ──────────────────────────
+    # ── Baseline: DCLIP (attribute descriptors) ───────────────────────
     if not args.skip_baselines:
-        print("--- Baseline 4: CuPL+e (uniform weight) ---")
+        print("--- Baseline: DCLIP ---")
+        dclip_client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+        dclip_cache = Path(args.output_dir) / f"dclip_descriptions_{n_classes}classes_{args.llm}.json"
+        if dclip_cache.exists():
+            with open(dclip_cache) as f:
+                dclip_descriptions = json.load(f)
+        else:
+            dclip_descriptions = {}
+            for i in range(0, len(classnames), 10):
+                batch = classnames[i:i+10]
+                prompt = (
+                    f"For each category, describe what it looks like.\n"
+                    f"Give 5-8 short visual descriptors per category.\n"
+                    f'Format each as: "{{class}} which has {{descriptor}}"\n\n'
+                    f"Categories: {', '.join(batch)}\n\n"
+                    f'Return ONLY valid JSON: {{"category": ["desc1", ...]}}\n'
+                )
+                try:
+                    resp = dclip_client.call(prompt, json_mode=True)
+                    descs = json.loads(resp)
+                    for cn in batch:
+                        found = None
+                        for key in descs:
+                            if cn.lower().strip() in key.lower():
+                                found = descs[key]
+                                break
+                        if found and isinstance(found, list):
+                            formatted = []
+                            for d in found:
+                                if cn.lower() not in d.lower():
+                                    d = f"{cn} which has {d}"
+                                formatted.append(d)
+                            dclip_descriptions[cn] = formatted
+                        else:
+                            dclip_descriptions[cn] = [f"a photo of a {cn}"]
+                except Exception:
+                    for cn in batch:
+                        dclip_descriptions[cn] = [f"a photo of a {cn}"]
+                if (i // 10 + 1) % 20 == 0:
+                    print(f"    DCLIP: {min(i+10, len(classnames))}/{len(classnames)} classes...")
+            dclip_cache.parent.mkdir(parents=True, exist_ok=True)
+            with open(dclip_cache, 'w') as f:
+                json.dump(dclip_descriptions, f, indent=1)
+        
+        ppc = {cls: {"prompts": dclip_descriptions.get(cls, [f"a photo of a {cls}"]),
+                      "weights": [1.0] * len(dclip_descriptions.get(cls, [f"a photo of a {cls}"]))}
+               for cls in classnames}
+        class_emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
+        metrics = evaluate_accuracy(image_features, labels, class_emb)
+        print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%  "
+              f"Δ: {(metrics['top1']-baseline_top1)*100:+.2f}%\n")
+        results["dclip"] = metrics
+    
+    # ── Baseline: CuPL (descriptions only, no templates) ────────────────
+    if not args.skip_baselines:
+        print("--- Baseline: CuPL (descriptions only) ---")
+        ppc = {cls: {"prompts": descriptions.get(cls, [f"a photo of a {cls}"]),
+                      "weights": [1.0] * len(descriptions.get(cls, [f"a photo of a {cls}"]))}
+               for cls in classnames}
+        class_emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
+        metrics = evaluate_accuracy(image_features, labels, class_emb)
+        print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%  "
+              f"Δ: {(metrics['top1']-baseline_top1)*100:+.2f}%\n")
+        results["cupl_desc_only"] = metrics
+
+    # ── Baseline: CuPL+e (uniform weight) ─────────────────────────────
+    if not args.skip_baselines:
+        print("--- Baseline: CuPL+e (uniform weight) ---")
         ppc = build_cupl_prompts(classnames, descriptions)
         class_emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
         metrics = evaluate_accuracy(image_features, labels, class_emb)
         print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%  "
               f"Δ: {(metrics['top1']-baseline_top1)*100:+.2f}%\n")
         results["cupl_ensemble"] = metrics
+
+    # ── Baseline: CLIP-Enhance (synonyms + descriptions) ──────────────
+    if not args.skip_baselines:
+        print("--- Baseline: CLIP-Enhance ---")
+        enhance_client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+        enhance_cache = Path(args.output_dir) / f"clip_enhance_{n_classes}classes_{args.llm}.json"
+        if enhance_cache.exists():
+            with open(enhance_cache) as f:
+                enhance_descriptions = json.load(f)
+        else:
+            enhance_descriptions = {}
+            for i in range(0, len(classnames), 10):
+                batch = classnames[i:i+10]
+                prompt = (
+                    f"For each category, provide:\n"
+                    f"1. 3 synonyms or alternative names\n"
+                    f"2. 5 visual descriptions of how it appears in a photo\n\n"
+                    f"Categories: {', '.join(batch)}\n\n"
+                    f'Return JSON: {{"category": {{"synonyms": ["syn1", ...], "descriptions": ["desc1", ...]}}}}\n'
+                    f"Return ONLY valid JSON."
+                )
+                try:
+                    resp = enhance_client.call(prompt, json_mode=True)
+                    descs = json.loads(resp)
+                    for cn in batch:
+                        found = None
+                        for key in descs:
+                            if cn.lower().strip() in key.lower():
+                                found = descs[key]
+                                break
+                        if found and isinstance(found, dict):
+                            syns = found.get("synonyms", [])
+                            vis = found.get("descriptions", [])
+                            all_p = [f"a photo of a {cn}"]
+                            for s in syns:
+                                all_p.append(f"a photo of a {s}")
+                            all_p.extend(vis)
+                            enhance_descriptions[cn] = all_p
+                        else:
+                            enhance_descriptions[cn] = [f"a photo of a {cn}"]
+                except Exception:
+                    for cn in batch:
+                        enhance_descriptions[cn] = [f"a photo of a {cn}"]
+                if (i // 10 + 1) % 20 == 0:
+                    print(f"    CLIP-Enhance: {min(i+10, len(classnames))}/{len(classnames)} classes...")
+            enhance_cache.parent.mkdir(parents=True, exist_ok=True)
+            with open(enhance_cache, 'w') as f:
+                json.dump(enhance_descriptions, f, indent=1)
+
+        ppc = {cls: {"prompts": enhance_descriptions.get(cls, [f"a photo of a {cls}"]),
+                      "weights": [1.0] * len(enhance_descriptions.get(cls, [f"a photo of a {cls}"]))}
+               for cls in classnames}
+        class_emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
+        metrics = evaluate_accuracy(image_features, labels, class_emb)
+        print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%  "
+              f"Δ: {(metrics['top1']-baseline_top1)*100:+.2f}%\n")
+        results["clip_enhance"] = metrics
+
+    # ── Baseline: Frolic (templates + desc uniform + logit correction) ─
+    if not args.skip_baselines:
+        print("--- Baseline: Frolic ---")
+        # Frolic uses CuPL+e prompts (same as cupl_ensemble) but applies
+        # per-class logit bias based on template-only confidence.
+        # Step 1: Get template-only logits
+        ppc_tmpl = build_template_prompts(classnames)
+        tmpl_emb = encode_text_prompts(model, tokenizer, ppc_tmpl, classnames, args.device)
+        tmpl_logits = image_features.to(tmpl_emb.device) @ tmpl_emb.T
+        tmpl_conf = tmpl_logits.softmax(dim=1)  # (n_images, n_classes)
+        # Per-class average confidence = prior
+        class_prior = tmpl_conf.mean(dim=0)  # (n_classes,)
+        log_prior = class_prior.log()
+        
+        # Step 2: Get CuPL+e logits
+        ppc_cupl = build_cupl_prompts(classnames, descriptions)
+        cupl_emb = encode_text_prompts(model, tokenizer, ppc_cupl, classnames, args.device)
+        cupl_logits = image_features.to(cupl_emb.device) @ cupl_emb.T
+        
+        # Step 3: Frolic = CuPL+e logits + log prior correction
+        frolic_logits = cupl_logits + 0.5 * log_prior.unsqueeze(0)
+        
+        preds = frolic_logits.argmax(dim=1)
+        labels_dev = labels.to(frolic_logits.device)
+        top1 = (preds == labels_dev).float().mean().item()
+        top5_preds = frolic_logits.topk(5, dim=1).indices
+        top5 = (top5_preds == labels_dev.unsqueeze(1)).any(dim=1).float().mean().item()
+        metrics = {"top1": top1, "top5": top5}
+        print(f"  Top-1: {metrics['top1']*100:.2f}%  Top-5: {metrics['top5']*100:.2f}%  "
+              f"Δ: {(metrics['top1']-baseline_top1)*100:+.2f}%\n")
+        results["frolic"] = metrics
     
     # ── NETRA weight sweep ────────────────────────────────────────────
     print(f"{'='*60}")
@@ -708,11 +893,17 @@ def main():
     print(f"{'='*60}")
     print(f"  SUMMARY — {dataset_name}")
     print(f"{'='*60}")
-    print(f"  80 templates:     {results['80_templates']['top1']*100:.2f}%")
-    if "cupl_ensemble" in results:
-        print(f"  CuPL+e:           {results['cupl_ensemble']['top1']*100:.2f}%")
-    print(f"  NETRA (default):  {default['top1']*100:.2f}% (Δ={default['delta_top1']*100:+.2f}%)")
-    print(f"  NETRA (best):     {best['top1']*100:.2f}% (Δ={best['delta_top1']*100:+.2f}%) @ {best['label']}")
+    print(f"  {'Method':<25} {'Top-1':>8} {'Δ':>8}")
+    print(f"  {'-'*43}")
+    print(f"  {'80 templates':<25} {results['80_templates']['top1']*100:>7.2f}%  {'---':>7}")
+    for key, name in [("waffle_clip", "WaffleCLIP"), ("cupl_desc_only", "CuPL (desc only)"),
+                       ("dclip", "DCLIP"), ("clip_enhance", "CLIP-Enhance"),
+                       ("cupl_ensemble", "CuPL+e"), ("frolic", "Frolic")]:
+        if key in results:
+            d = (results[key]['top1'] - baseline_top1) * 100
+            print(f"  {name:<25} {results[key]['top1']*100:>7.2f}% {d:>+7.2f}%")
+    print(f"  {'NETRA (55/45 default)':<25} {default['top1']*100:>7.2f}% {default['delta_top1']*100:>+7.2f}%")
+    print(f"  {'NETRA (best)':<25} {best['top1']*100:>7.2f}% {best['delta_top1']*100:>+7.2f}%  @ {best['label']}")
     print(f"{'='*60}\n")
     
     # ── Save ──────────────────────────────────────────────────────────
