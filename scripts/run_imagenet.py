@@ -145,12 +145,13 @@ def load_imagenet_v2(data_dir=None, val_size=None):
     
     Three ways to load:
     1. --data-dir pointing to extracted folder (ImageFolder format)
-    2. HuggingFace datasets library (pip install datasets)
+    2. Auto-download tar.gz from HuggingFace via huggingface_hub
     3. imagenetv2_pytorch package
     """
+    from torchvision.datasets import ImageFolder
+    
     # Option 1: User provides data dir
     if data_dir and os.path.exists(data_dir):
-        from torchvision.datasets import ImageFolder
         dataset = ImageFolder(data_dir)
         classnames = download_imagenet_classnames()
         if classnames is None:
@@ -163,67 +164,52 @@ def load_imagenet_v2(data_dir=None, val_size=None):
             indices = np.arange(len(dataset))
         return dataset, classnames, indices
     
-    # Option 2: HuggingFace datasets (recommended)
-    try:
-        from datasets import load_dataset
-        print("  Loading ImageNet-V2 from HuggingFace (vaishaal/ImageNetV2)...")
-        hf_dataset = load_dataset("vaishaal/ImageNetV2", "matched-frequency", split="test")
-        
-        classnames = download_imagenet_classnames()
-        if classnames is None:
-            classnames = [str(i) for i in range(1000)]
-        
-        # Wrap HuggingFace dataset to work with our pipeline
-        class HFImageNetV2:
-            def __init__(self, hf_ds):
-                self.hf_ds = hf_ds
-            def __len__(self):
-                return len(self.hf_ds)
-            def __getitem__(self, idx):
-                item = self.hf_ds[idx]
-                img = item["image"]
-                label = item["label"]
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                return img, label
-        
-        dataset = HFImageNetV2(hf_dataset)
-        print(f"  Loaded ImageNet-V2: {len(dataset)} images, {len(classnames)} classes")
-        
-        if val_size and val_size < len(dataset):
-            indices = np.random.RandomState(42).permutation(len(dataset))[:val_size]
-        else:
-            indices = np.arange(len(dataset))
-        return dataset, classnames, indices
+    # Option 2: Download tar.gz from HuggingFace repo
+    download_dir = data_dir or "./data/imagenet-v2"
+    extracted_dir = os.path.join(download_dir, "imagenetv2-matched-frequency-format-val")
     
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"  HuggingFace load failed: {e}")
-    
-    # Option 3: imagenetv2_pytorch package
-    try:
-        from imagenetv2_pytorch import ImageNetV2Dataset
-        dataset = ImageNetV2Dataset("matched-frequency")
-        classnames = download_imagenet_classnames()
-        if classnames is None:
-            classnames = [str(i) for i in range(1000)]
-        print(f"  Loaded ImageNet-V2 via imagenetv2_pytorch: {len(dataset)} images")
+    if not os.path.exists(extracted_dir):
+        os.makedirs(download_dir, exist_ok=True)
+        tar_path = os.path.join(download_dir, "imagenetv2-matched-frequency.tar.gz")
         
-        if val_size and val_size < len(dataset):
-            indices = np.random.RandomState(42).permutation(len(dataset))[:val_size]
-        else:
-            indices = np.arange(len(dataset))
-        return dataset, classnames, indices
-    except ImportError:
-        pass
+        if not os.path.exists(tar_path):
+            try:
+                from huggingface_hub import hf_hub_download
+                print("  Downloading ImageNet-V2 from HuggingFace (~1.26GB)...")
+                tar_path = hf_hub_download(
+                    repo_id="vaishaal/ImageNetV2",
+                    filename="imagenetv2-matched-frequency.tar.gz",
+                    repo_type="dataset",
+                    local_dir=download_dir,
+                )
+            except ImportError:
+                raise RuntimeError(
+                    "Please install huggingface_hub: pip install huggingface_hub\n"
+                    "Or download manually:\n"
+                    "  1. Go to https://huggingface.co/datasets/vaishaal/ImageNetV2/tree/main\n"
+                    "  2. Download imagenetv2-matched-frequency.tar.gz\n"
+                    "  3. Extract and pass --data-dir to the extracted folder"
+                )
+        
+        print(f"  Extracting...")
+        import tarfile
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(download_dir)
+        print(f"  Extracted to {extracted_dir}")
     
-    raise RuntimeError(
-        "Could not load ImageNet-V2. Please install one of:\n"
-        "  pip install datasets          # HuggingFace (recommended)\n"
-        "  pip install imagenetv2_pytorch # PyTorch wrapper\n"
-        "Or download manually and pass --data-dir."
-    )
+    dataset = ImageFolder(extracted_dir)
+    classnames = download_imagenet_classnames()
+    if classnames is None:
+        classnames = [str(i) for i in range(1000)]
+    
+    print(f"  Loaded ImageNet-V2: {len(dataset)} images, {len(classnames)} classes")
+    
+    if val_size and val_size < len(dataset):
+        indices = np.random.RandomState(42).permutation(len(dataset))[:val_size]
+    else:
+        indices = np.arange(len(dataset))
+    
+    return dataset, classnames, indices
 
 
 def load_domainnet(data_dir, domain="real", val_size=None):
