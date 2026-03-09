@@ -25,26 +25,15 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.run import build_task_spec, build_task_runner
+from scripts.run import build_task_spec
 from visprompt.baselines import IMAGENET_TEMPLATES
 from visprompt.utils.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
 
-def compute_group_divergence(task_runner, class_names, descriptions):
+def compute_group_divergence(model, tokenizer, class_names, descriptions, device):
     """Compute mean cosine divergence between template and description centroids."""
-    import open_clip
-    
-    device = next(task_runner._clip_model.parameters()).device
-    model = task_runner._clip_model
-    
-    # Get tokenizer
-    model_name = getattr(task_runner, '_clip_model_name', 'ViT-L-14')
-    # Normalize model name for open_clip
-    model_name_clean = model_name.replace('/', '-')
-    tokenizer = open_clip.get_tokenizer(model_name_clean)
-    
     per_class_cosine = {}
     
     for cls in class_names:
@@ -123,14 +112,25 @@ def main():
         "country211": 0.0,
     }
     
+    # Load CLIP model once (shared across datasets)
+    import open_clip
+    model_name = args.clip_model or "ViT-L/14"
+    model_name_clean = model_name.replace('/', '-')
+    print(f"Loading CLIP model {model_name}...")
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        model_name_clean, pretrained='openai', device=args.device
+    )
+    model.eval()
+    tokenizer = open_clip.get_tokenizer(model_name_clean)
+    print(f"  Done.\n")
+    
     for dataset_name in args.datasets:
         print(f"\n--- {dataset_name} ---")
         
         try:
-            # Build task spec and runner
+            # Get class names
             args.dataset = dataset_name
             task_spec = build_task_spec(args)
-            task_runner = build_task_runner(args, task_spec)
             class_names = task_spec.class_names
             
             # Generate or load descriptions
@@ -171,7 +171,7 @@ def main():
             
             # Compute divergence
             _, mean_cos, divergence = compute_group_divergence(
-                task_runner, class_names, descriptions
+                model, tokenizer, class_names, descriptions, args.device
             )
             
             # Predict alpha
