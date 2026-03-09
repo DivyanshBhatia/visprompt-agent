@@ -402,8 +402,12 @@ def encode_text_prompts(model, tokenizer, prompts_per_class, classnames, device)
 
 def evaluate_accuracy(image_features, labels, class_embeddings):
     """Compute top-1 and top-5 accuracy."""
-    # image_features: (n_images, dim), class_embeddings: (n_classes, dim)
-    sims = (image_features @ class_embeddings.T)  # (n_images, n_classes)
+    # Ensure all on same device
+    device = class_embeddings.device
+    image_features = image_features.to(device)
+    labels = labels.to(device)
+    
+    sims = (image_features @ class_embeddings.T)
     
     # Top-1
     preds = sims.argmax(dim=1)
