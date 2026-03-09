@@ -192,9 +192,25 @@ def load_imagenet_v2(data_dir=None, val_size=None):
                 )
         
         print(f"  Extracting...")
-        import tarfile
-        with tarfile.open(tar_path, "r:gz") as tar:
-            tar.extractall(download_dir)
+        import tarfile, zipfile
+        # Auto-detect format (HF xet storage may strip gzip)
+        if tarfile.is_tarfile(tar_path):
+            with tarfile.open(tar_path) as tar:
+                tar.extractall(download_dir)
+        elif zipfile.is_zipfile(tar_path):
+            with zipfile.ZipFile(tar_path, 'r') as zf:
+                zf.extractall(download_dir)
+        else:
+            raise RuntimeError(f"Cannot extract {tar_path} — unknown format")
+        
+        # Find the extracted folder
+        if not os.path.exists(extracted_dir):
+            for d in os.listdir(download_dir):
+                full = os.path.join(download_dir, d)
+                if os.path.isdir(full) and "imagenetv2" in d.lower():
+                    extracted_dir = full
+                    break
+        
         print(f"  Extracted to {extracted_dir}")
     
     dataset = ImageFolder(extracted_dir)
