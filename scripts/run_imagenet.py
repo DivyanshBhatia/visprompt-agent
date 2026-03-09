@@ -141,49 +141,80 @@ def load_imagenet(data_dir, val_size=None):
 
 
 def load_imagenet_v2(data_dir=None, val_size=None):
-    """Load ImageNet-V2 (matched frequency variant)."""
-    try:
+    """Load ImageNet-V2 (matched frequency variant).
+    
+    Three ways to load:
+    1. --data-dir pointing to extracted imagenetv2-matched-frequency-format-val/
+    2. Auto-download from S3 (original source)
+    3. pip install imagenetv2_pytorch (cleanest)
+    """
+    # Option 1: User provides data dir
+    if data_dir and os.path.exists(data_dir):
         from torchvision.datasets import ImageFolder
-        
-        if data_dir is None:
-            # Try to auto-download
-            data_dir = "./data/imagenet-v2"
-            if not os.path.exists(data_dir):
-                print("Downloading ImageNet-V2...")
-                os.makedirs(data_dir, exist_ok=True)
-                import urllib.request, tarfile
-                url = "https://huggingface.co/datasets/vaishaal/ImageNetV2/resolve/main/imagenetv2-matched-frequency-format-val.tar.gz"
-                tar_path = os.path.join(data_dir, "imagenetv2.tar.gz")
-                urllib.request.urlretrieve(url, tar_path)
-                with tarfile.open(tar_path) as tar:
-                    tar.extractall(data_dir)
-                os.remove(tar_path)
-                # Find extracted folder
-                for d in os.listdir(data_dir):
-                    if os.path.isdir(os.path.join(data_dir, d)):
-                        data_dir = os.path.join(data_dir, d)
-                        break
-        
         dataset = ImageFolder(data_dir)
         classnames = download_imagenet_classnames()
         if classnames is None:
-            classnames = [name.replace('_', ' ') for name in dataset.classes]
-        
-        print(f"  Loaded ImageNet-V2: {len(dataset)} images, {len(classnames)} classes")
+            classnames = [str(i) for i in range(1000)]
+        print(f"  Loaded ImageNet-V2 from {data_dir}: {len(dataset)} images")
         
         if val_size and val_size < len(dataset):
             indices = np.random.RandomState(42).permutation(len(dataset))[:val_size]
         else:
             indices = np.arange(len(dataset))
-        
         return dataset, classnames, indices
     
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to load ImageNet-V2: {e}\n"
-            "Please download manually from https://huggingface.co/datasets/vaishaal/ImageNetV2 "
-            "and pass --data-dir pointing to the extracted folder."
-        )
+    # Option 2: Try imagenetv2_pytorch package
+    try:
+        from imagenetv2_pytorch import ImageNetV2Dataset
+        dataset = ImageNetV2Dataset("matched-frequency")
+        classnames = download_imagenet_classnames()
+        if classnames is None:
+            classnames = [str(i) for i in range(1000)]
+        print(f"  Loaded ImageNet-V2 via imagenetv2_pytorch: {len(dataset)} images")
+        
+        if val_size and val_size < len(dataset):
+            indices = np.random.RandomState(42).permutation(len(dataset))[:val_size]
+        else:
+            indices = np.arange(len(dataset))
+        return dataset, classnames, indices
+    except ImportError:
+        pass
+    
+    # Option 3: Auto-download from S3
+    download_dir = data_dir or "./data/imagenet-v2"
+    extracted_dir = os.path.join(download_dir, "imagenetv2-matched-frequency-format-val")
+    
+    if not os.path.exists(extracted_dir):
+        os.makedirs(download_dir, exist_ok=True)
+        url = "https://s3-us-west-2.amazonaws.com/imagenetv2public/imagenetv2-matched-frequency.tar.gz"
+        tar_path = os.path.join(download_dir, "imagenetv2-matched-frequency.tar.gz")
+        
+        print(f"  Downloading ImageNet-V2 from S3 (~1.2GB)...")
+        print(f"  URL: {url}")
+        import urllib.request
+        urllib.request.urlretrieve(url, tar_path)
+        
+        print(f"  Extracting...")
+        import tarfile
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(download_dir)
+        os.remove(tar_path)
+        print(f"  Extracted to {extracted_dir}")
+    
+    from torchvision.datasets import ImageFolder
+    dataset = ImageFolder(extracted_dir)
+    classnames = download_imagenet_classnames()
+    if classnames is None:
+        classnames = [str(i) for i in range(1000)]
+    
+    print(f"  Loaded ImageNet-V2: {len(dataset)} images, {len(classnames)} classes")
+    
+    if val_size and val_size < len(dataset):
+        indices = np.random.RandomState(42).permutation(len(dataset))[:val_size]
+    else:
+        indices = np.arange(len(dataset))
+    
+    return dataset, classnames, indices
 
 
 def load_domainnet(data_dir, domain="real", val_size=None):
