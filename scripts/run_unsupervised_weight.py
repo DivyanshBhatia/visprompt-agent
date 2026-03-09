@@ -33,27 +33,26 @@ logger = logging.getLogger(__name__)
 
 
 def compute_group_divergence(task_runner, class_names, descriptions):
-    """Compute mean cosine divergence between template and description centroids.
+    """Compute mean cosine divergence between template and description centroids."""
+    import open_clip
     
-    For each class:
-      1. Encode all templates → average → normalize = template centroid
-      2. Encode all descriptions → average → normalize = description centroid
-      3. Cosine similarity between the two centroids
-    
-    Returns:
-      - per_class_cosine: dict of {class_name: cosine_sim}
-      - mean_cosine: average across all classes
-      - divergence: 1 - mean_cosine (higher = more different)
-    """
     device = next(task_runner._clip_model.parameters()).device
+    model = task_runner._clip_model
+    
+    # Get tokenizer
+    model_name = getattr(task_runner, '_clip_model_name', 'ViT-L-14')
+    # Normalize model name for open_clip
+    model_name_clean = model_name.replace('/', '-')
+    tokenizer = open_clip.get_tokenizer(model_name_clean)
+    
     per_class_cosine = {}
     
     for cls in class_names:
         # Template centroid
         templates = [t.format(cls) for t in IMAGENET_TEMPLATES]
-        tmpl_tokens = task_runner._tokenize(templates)
+        tmpl_tokens = tokenizer(templates).to(device)
         with torch.no_grad():
-            tmpl_emb = task_runner._clip_model.encode_text(tmpl_tokens.to(device))
+            tmpl_emb = model.encode_text(tmpl_tokens)
             tmpl_emb = tmpl_emb / tmpl_emb.norm(dim=-1, keepdim=True)
             tmpl_centroid = tmpl_emb.mean(dim=0)
             tmpl_centroid = tmpl_centroid / tmpl_centroid.norm()
@@ -62,14 +61,13 @@ def compute_group_divergence(task_runner, class_names, descriptions):
         descs = descriptions.get(cls, [f"a photo of a {cls}"])
         if len(descs) == 0:
             descs = [f"a photo of a {cls}"]
-        desc_tokens = task_runner._tokenize(descs)
+        desc_tokens = tokenizer(descs).to(device)
         with torch.no_grad():
-            desc_emb = task_runner._clip_model.encode_text(desc_tokens.to(device))
+            desc_emb = model.encode_text(desc_tokens)
             desc_emb = desc_emb / desc_emb.norm(dim=-1, keepdim=True)
             desc_centroid = desc_emb.mean(dim=0)
             desc_centroid = desc_centroid / desc_centroid.norm()
         
-        # Cosine similarity
         cos_sim = (tmpl_centroid @ desc_centroid).item()
         per_class_cosine[cls] = cos_sim
     
@@ -136,10 +134,40 @@ def main():
             class_names = task_spec.class_names
             
             # Generate or load descriptions
-            from scripts.run import generate_descriptions
-            descriptions = generate_descriptions(task_spec, args.llm, args.llm_provider)
-            if isinstance(descriptions, tuple):
-                descriptions = descriptions[0]
+            desc_cache = Path(args.output_dir) / f"descriptions_{dataset_name}_{args.llm}.json"
+            if desc_cache.exists():
+                with open(desc_cache) as f:
+                    descriptions = json.load(f)
+                print(f"  Loaded cached descriptions from {desc_cache}")
+            else:
+                client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+                descriptions = {}
+                for i in range(0, len(class_names), 10):
+                    batch = class_names[i:i+10]
+                    prompt = (
+                        f"For each category below, provide 10-15 short visual descriptions "
+                        f"suitable for CLIP-based image classification. Focus on distinctive "
+                        f"visual attributes: color, shape, texture, size, parts, habitat/setting.\n\n"
+                        f"Categories: {', '.join(batch)}\n\n"
+                        f'Return ONLY valid JSON: {{"category": ["description1", ...]}}\n'
+                    )
+                    try:
+                        resp = client.call(prompt, json_mode=True)
+                        descs = json.loads(resp)
+                        for cn in batch:
+                            found = None
+                            for key in descs:
+                                if cn.lower().strip() in key.lower():
+                                    found = descs[key]
+                                    break
+                            descriptions[cn] = found if found and isinstance(found, list) else [f"a photo of a {cn}"]
+                    except Exception as e:
+                        for cn in batch:
+                            descriptions[cn] = [f"a photo of a {cn}"]
+                desc_cache.parent.mkdir(parents=True, exist_ok=True)
+                with open(desc_cache, 'w') as f:
+                    json.dump(descriptions, f, indent=1)
+                print(f"  Generated and cached descriptions")
             
             # Compute divergence
             _, mean_cos, divergence = compute_group_divergence(
