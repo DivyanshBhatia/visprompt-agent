@@ -820,6 +820,66 @@ Return ONLY valid JSON."""
     print(f"  CLIP-Enhance:       {enhance_acc:.4f}")
     baselines["clip_enhance"] = float(enhance_acc)
     
+    # Frolic: CuPL+e logits + 0.5 * log(class_prior)
+    print(f"\n--- Frolic baseline ---")
+    # Step 1: get template class embeddings for prior
+    tmpl_text_features = []
+    for cn in class_names:
+        texts = [t.format(cn.lower()) for t in ACTION_TEMPLATES] + \
+                [t.format(cn.lower()) for t in IMAGENET_TEMPLATES]
+        feats = []
+        for text in texts:
+            tokens = tokenizer(text).to(args.device)
+            with torch.no_grad():
+                feat = model.encode_text(tokens)
+                feat = feat / feat.norm(dim=-1, keepdim=True)
+            feats.append(feat.squeeze(0))
+        feats = torch.stack(feats)
+        cls_feat = feats.mean(dim=0)
+        cls_feat = cls_feat / cls_feat.norm()
+        tmpl_text_features.append(cls_feat)
+    tmpl_text_features = torch.stack(tmpl_text_features).to(args.device)
+    
+    if hasattr(model, 'logit_scale'):
+        logit_scale = model.logit_scale.exp()
+    else:
+        logit_scale = torch.tensor(100.0).to(args.device)
+    
+    test_feat = test_features.to(args.device)
+    with torch.no_grad():
+        tmpl_logits = logit_scale * test_feat @ tmpl_text_features.T
+        class_prior = tmpl_logits.softmax(dim=1).mean(dim=0)
+        log_prior = class_prior.log()
+    
+    # Step 2: get CuPL+e class embeddings
+    cupl_text_features = []
+    for cn in class_names:
+        base = [t.format(cn.lower()) for t in ACTION_TEMPLATES] + \
+               [t.format(cn.lower()) for t in IMAGENET_TEMPLATES]
+        descs = cupl_descriptions.get(cn, [])
+        all_p = base + descs
+        feats = []
+        for text in all_p:
+            tokens = tokenizer(text).to(args.device)
+            with torch.no_grad():
+                feat = model.encode_text(tokens)
+                feat = feat / feat.norm(dim=-1, keepdim=True)
+            feats.append(feat.squeeze(0))
+        feats = torch.stack(feats)
+        cls_feat = feats.mean(dim=0)
+        cls_feat = cls_feat / cls_feat.norm()
+        cupl_text_features.append(cls_feat)
+    cupl_text_features = torch.stack(cupl_text_features).to(args.device)
+    
+    # Step 3: Frolic = CuPL+e logits + 0.5 * log_prior
+    with torch.no_grad():
+        cupl_logits = logit_scale * test_feat @ cupl_text_features.T
+        frolic_logits = cupl_logits + 0.5 * log_prior.unsqueeze(0)
+        frolic_preds = frolic_logits.argmax(dim=-1).cpu().numpy()
+    frolic_acc = float(np.mean(frolic_preds == labels))
+    print(f"  Frolic:             {frolic_acc:.4f}")
+    baselines["frolic"] = float(frolic_acc)
+    
     print(f"\n  Summary:")
     for name, acc in sorted(baselines.items(), key=lambda x: x[1], reverse=True):
         print(f"    {name:<25} {acc:.4f}")
