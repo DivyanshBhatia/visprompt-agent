@@ -397,6 +397,136 @@ def main():
     print(f"  Top-1: {m['top1']*100:.2f}%  Δ: {(m['top1']-baseline_top1)*100:+.2f}%\n")
     results["cupl_ensemble"] = m
 
+    # DCLIP (attribute descriptors)
+    print("--- DCLIP ---")
+    dclip_cache = Path(args.output_dir) / f"dclip_action_{args.dataset}_{args.llm}.json"
+    if dclip_cache.exists():
+        with open(dclip_cache) as f:
+            dclip_descriptions = json.load(f)
+    else:
+        dclip_client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+        dclip_descriptions = {}
+        for i in range(0, len(classnames), 10):
+            batch = classnames[i:i+10]
+            prompt = (
+                f"For each action, describe what a person doing it looks like.\n"
+                f"Give 5-8 short visual descriptors per action.\n"
+                f'Format each as: "a person {{action}} which involves {{descriptor}}"\n\n'
+                f"Actions: {', '.join(batch)}\n\n"
+                f'Return ONLY valid JSON: {{"action": ["desc1", ...]}}\n'
+            )
+            try:
+                resp = dclip_client.call(prompt, json_mode=True)
+                descs = json.loads(resp)
+                for cn in batch:
+                    found = None
+                    for key in descs:
+                        if cn.lower().strip() in key.lower():
+                            found = descs[key]
+                            break
+                    if found and isinstance(found, list):
+                        formatted = []
+                        for d in found:
+                            if cn.lower() not in d.lower():
+                                d = f"a person {cn} which involves {d}"
+                            formatted.append(d)
+                        dclip_descriptions[cn] = formatted
+                    else:
+                        dclip_descriptions[cn] = [f"a photo of a person {cn}"]
+            except Exception:
+                for cn in batch:
+                    dclip_descriptions[cn] = [f"a photo of a person {cn}"]
+        dclip_cache.parent.mkdir(parents=True, exist_ok=True)
+        with open(dclip_cache, 'w') as f:
+            json.dump(dclip_descriptions, f, indent=1)
+
+    ppc = {c: {"prompts": dclip_descriptions.get(c, [f"a photo of a person {c}"]),
+               "weights": [1.0] * len(dclip_descriptions.get(c, [f"a photo of a person {c}"]))}
+           for c in classnames}
+    emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
+    m = evaluate(image_features, labels, emb)
+    print(f"  Top-1: {m['top1']*100:.2f}%  Δ: {(m['top1']-baseline_top1)*100:+.2f}%\n")
+    results["dclip"] = m
+
+    # CLIP-Enhance (synonyms + descriptions)
+    print("--- CLIP-Enhance ---")
+    enhance_cache = Path(args.output_dir) / f"enhance_action_{args.dataset}_{args.llm}.json"
+    if enhance_cache.exists():
+        with open(enhance_cache) as f:
+            enhance_descriptions = json.load(f)
+    else:
+        enhance_client = LLMClient(model=args.llm, provider=args.llm_provider, temperature=0.7)
+        enhance_descriptions = {}
+        for i in range(0, len(classnames), 10):
+            batch = classnames[i:i+10]
+            prompt = (
+                f"For each action, provide:\n"
+                f"1. 3 synonyms or alternative names for this action\n"
+                f"2. 5 visual descriptions of what someone doing it looks like\n\n"
+                f"Actions: {', '.join(batch)}\n\n"
+                f'Return JSON: {{"action": {{"synonyms": ["syn1", ...], "descriptions": ["desc1", ...]}}}}\n'
+                f"Return ONLY valid JSON."
+            )
+            try:
+                resp = enhance_client.call(prompt, json_mode=True)
+                descs = json.loads(resp)
+                for cn in batch:
+                    found = None
+                    for key in descs:
+                        if cn.lower().strip() in key.lower():
+                            found = descs[key]
+                            break
+                    if found and isinstance(found, dict):
+                        syns = found.get("synonyms", [])
+                        vis = found.get("descriptions", [])
+                        all_p = [f"a photo of a person {cn}"]
+                        for s in syns:
+                            all_p.append(f"a photo of a person {s}")
+                        all_p.extend(vis)
+                        enhance_descriptions[cn] = all_p
+                    else:
+                        enhance_descriptions[cn] = [f"a photo of a person {cn}"]
+            except Exception:
+                for cn in batch:
+                    enhance_descriptions[cn] = [f"a photo of a person {cn}"]
+        enhance_cache.parent.mkdir(parents=True, exist_ok=True)
+        with open(enhance_cache, 'w') as f:
+            json.dump(enhance_descriptions, f, indent=1)
+
+    ppc = {c: {"prompts": enhance_descriptions.get(c, [f"a photo of a person {c}"]),
+               "weights": [1.0] * len(enhance_descriptions.get(c, [f"a photo of a person {c}"]))}
+           for c in classnames}
+    emb = encode_text_prompts(model, tokenizer, ppc, classnames, args.device)
+    m = evaluate(image_features, labels, emb)
+    print(f"  Top-1: {m['top1']*100:.2f}%  Δ: {(m['top1']-baseline_top1)*100:+.2f}%\n")
+    results["clip_enhance"] = m
+
+    # Frolic (CuPL+e + logit correction)
+    print("--- Frolic ---")
+    tmpl_emb = encode_text_prompts(model, tokenizer, build_action_templates(classnames), classnames, args.device)
+    tmpl_logits = image_features.to(tmpl_emb.device) @ tmpl_emb.T
+    class_prior = tmpl_logits.softmax(dim=1).mean(dim=0)
+    log_prior = class_prior.log()
+
+    cupl_ppc = {}
+    for c in classnames:
+        tmpl = [t.format(c) for t in ACTION_TEMPLATES] + [t.format(c) for t in IMAGENET_TEMPLATES]
+        descs = descriptions.get(c, [])
+        all_p = tmpl + descs
+        cupl_ppc[c] = {"prompts": all_p, "weights": [1.0] * len(all_p)}
+    cupl_emb = encode_text_prompts(model, tokenizer, cupl_ppc, classnames, args.device)
+    cupl_logits = image_features.to(cupl_emb.device) @ cupl_emb.T
+    frolic_logits = cupl_logits + 0.5 * log_prior.unsqueeze(0)
+
+    labels_t = torch.tensor(labels, device=frolic_logits.device)
+    preds = frolic_logits.argmax(dim=1)
+    top1 = (preds == labels_t).float().mean().item()
+    top5_preds = frolic_logits.topk(min(5, frolic_logits.shape[1]), dim=1).indices
+    top5 = (top5_preds == labels_t.unsqueeze(1)).any(dim=1).float().mean().item()
+    m = {"top1": top1, "top5": top5}
+    print(f"  Top-1: {m['top1']*100:.2f}%  Δ: {(m['top1']-baseline_top1)*100:+.2f}%\n")
+    results["frolic"] = m
+
     # --- NETRA sweep ---
     print(f"{'='*60}")
     print(f"  NETRA WEIGHT SWEEP — {args.dataset}")
@@ -432,7 +562,8 @@ def main():
     print(f"  {'-'*43}")
     print(f"  {'90 templates':<25} {baseline_top1*100:>7.2f}%  {'---':>7}")
     for key, name in [("waffle_clip","WaffleCLIP"), ("cupl_desc_only","CuPL (desc)"),
-                       ("cupl_ensemble","CuPL+e")]:
+                       ("dclip","DCLIP"), ("clip_enhance","CLIP-Enhance"),
+                       ("cupl_ensemble","CuPL+e"), ("frolic","Frolic")]:
         if key in results:
             d = (results[key]['top1'] - baseline_top1) * 100
             print(f"  {name:<25} {results[key]['top1']*100:>7.2f}% {d:>+7.2f}%")
