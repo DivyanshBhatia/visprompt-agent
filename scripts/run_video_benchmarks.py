@@ -93,14 +93,16 @@ def extract_middle_frame(video_path):
 def load_video_dataset(data_dir, dataset_name, val_size=None, split="test"):
     """Load video dataset by extracting middle frames.
 
-    Expects ImageFolder-like structure: data_dir/class_name/video.avi
+    Supports two formats:
+    1. Video files: data_dir/class_name/video.avi → extract middle frame
+    2. Frame folders: data_dir/class_name/video_clip_folder/frame_001.jpg → pick middle frame
     """
+    from PIL import Image
     data_path = Path(data_dir)
 
     # Find class folders
     class_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
     if len(class_dirs) == 0:
-        # Try looking for split subfolder
         for s in [split, "val", "test", "testing"]:
             sp = data_path / s
             if sp.exists():
@@ -115,39 +117,129 @@ def load_video_dataset(data_dir, dataset_name, val_size=None, split="test"):
     classnames = [d.name.replace('_', ' ') for d in class_dirs]
     class_to_idx = {d.name: i for i, d in enumerate(class_dirs)}
 
-    # Collect video files
     video_extensions = {'.avi', '.mp4', '.mkv', '.mov', '.webm'}
-    all_videos = []
-    for cls_dir in class_dirs:
-        for f in cls_dir.iterdir():
-            if f.suffix.lower() in video_extensions:
-                all_videos.append((f, class_to_idx[cls_dir.name]))
+    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
 
-    print(f"  Found {len(all_videos)} videos across {len(classnames)} classes")
+    # Detect format: check first class folder
+    first_class = class_dirs[0]
+    first_children = list(first_class.iterdir())
 
-    # Subsample if needed
-    if val_size and val_size < len(all_videos):
-        random.seed(42)
-        all_videos = random.sample(all_videos, val_size)
-        print(f"  Subsampled to {val_size} videos")
+    # Check if children are subdirectories (frame folders) or files
+    has_subdirs = any(c.is_dir() for c in first_children)
+    has_videos = any(c.suffix.lower() in video_extensions for c in first_children if c.is_file())
+    has_images = any(c.suffix.lower() in image_extensions for c in first_children if c.is_file())
 
-    # Extract middle frames
-    print(f"  Extracting middle frames...")
-    images = []
-    labels = []
-    skipped = 0
-    for i, (vpath, label) in enumerate(all_videos):
-        frame = extract_middle_frame(vpath)
-        if frame is not None:
-            images.append(frame)
-            labels.append(label)
-        else:
-            skipped += 1
-        if (i + 1) % 1000 == 0:
-            print(f"    {i+1}/{len(all_videos)} videos processed ({skipped} skipped)")
+    if has_subdirs:
+        # Format: class_dir/clip_folder/frame_001.jpg → pick middle frame per clip
+        print(f"  Detected frame-folder format (e.g., HMDB-51 extracted frames)")
+        all_clips = []
+        for cls_dir in class_dirs:
+            for clip_dir in sorted(cls_dir.iterdir()):
+                if clip_dir.is_dir():
+                    all_clips.append((clip_dir, class_to_idx[cls_dir.name]))
 
-    print(f"  Extracted {len(images)} frames ({skipped} videos skipped)")
-    return images, labels, classnames
+        print(f"  Found {len(all_clips)} clips across {len(classnames)} classes")
+
+        if val_size and val_size < len(all_clips):
+            random.seed(42)
+            all_clips = random.sample(all_clips, val_size)
+            print(f"  Subsampled to {val_size} clips")
+
+        print(f"  Picking middle frame from each clip...")
+        images = []
+        labels = []
+        skipped = 0
+        for i, (clip_dir, label) in enumerate(all_clips):
+            frames = sorted([f for f in clip_dir.iterdir()
+                           if f.suffix.lower() in image_extensions])
+            if len(frames) == 0:
+                skipped += 1
+                continue
+            mid_frame = frames[len(frames) // 2]
+            try:
+                img = Image.open(mid_frame).convert('RGB')
+                images.append(img)
+                labels.append(label)
+            except Exception:
+                skipped += 1
+            if (i + 1) % 1000 == 0:
+                print(f"    {i+1}/{len(all_clips)} clips processed")
+
+        print(f"  Loaded {len(images)} frames ({skipped} clips skipped)")
+        return images, labels, classnames
+
+    elif has_videos:
+        # Format: class_dir/video.avi → extract middle frame
+        print(f"  Detected video file format")
+        all_videos = []
+        for cls_dir in class_dirs:
+            for f in cls_dir.iterdir():
+                if f.suffix.lower() in video_extensions:
+                    all_videos.append((f, class_to_idx[cls_dir.name]))
+
+        print(f"  Found {len(all_videos)} videos across {len(classnames)} classes")
+
+        if val_size and val_size < len(all_videos):
+            random.seed(42)
+            all_videos = random.sample(all_videos, val_size)
+            print(f"  Subsampled to {val_size} videos")
+
+        print(f"  Extracting middle frames...")
+        images = []
+        labels = []
+        skipped = 0
+        for i, (vpath, label) in enumerate(all_videos):
+            frame = extract_middle_frame(vpath)
+            if frame is not None:
+                images.append(frame)
+                labels.append(label)
+            else:
+                skipped += 1
+            if (i + 1) % 1000 == 0:
+                print(f"    {i+1}/{len(all_videos)} videos processed ({skipped} skipped)")
+
+        print(f"  Extracted {len(images)} frames ({skipped} videos skipped)")
+        return images, labels, classnames
+
+    elif has_images:
+        # Format: class_dir/image.jpg → just load images directly (already frames)
+        print(f"  Detected image file format (pre-extracted single frames)")
+        all_images = []
+        for cls_dir in class_dirs:
+            for f in cls_dir.iterdir():
+                if f.suffix.lower() in image_extensions:
+                    all_images.append((f, class_to_idx[cls_dir.name]))
+
+        print(f"  Found {len(all_images)} images across {len(classnames)} classes")
+
+        if val_size and val_size < len(all_images):
+            random.seed(42)
+            all_images = random.sample(all_images, val_size)
+            print(f"  Subsampled to {val_size} images")
+
+        images = []
+        labels = []
+        skipped = 0
+        for i, (fpath, label) in enumerate(all_images):
+            try:
+                img = Image.open(fpath).convert('RGB')
+                images.append(img)
+                labels.append(label)
+            except Exception:
+                skipped += 1
+            if (i + 1) % 1000 == 0:
+                print(f"    {i+1}/{len(all_images)} images loaded")
+
+        print(f"  Loaded {len(images)} images ({skipped} skipped)")
+        return images, labels, classnames
+
+    else:
+        raise RuntimeError(
+            f"Could not detect format in {data_dir}. Expected one of:\n"
+            f"  1. class_dir/clip_folder/frame.jpg (HMDB-51 extracted)\n"
+            f"  2. class_dir/video.avi (video files)\n"
+            f"  3. class_dir/image.jpg (pre-extracted frames)"
+        )
 
 
 def load_clip_model(model_name, device):
