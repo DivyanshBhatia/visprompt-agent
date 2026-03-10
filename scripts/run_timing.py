@@ -34,7 +34,7 @@ def get_gpu_info():
     """Get GPU name and memory."""
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
-        total_mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+        total_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         return name, total_mem
     return "CPU", 0
 
