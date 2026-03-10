@@ -90,16 +90,143 @@ def extract_middle_frame(video_path):
         return None
 
 
+KINETICS_400_CLASSNAMES = None  # Loaded on demand
+
+def _get_kinetics400_classnames():
+    """Get Kinetics-400 class names (id → name mapping)."""
+    global KINETICS_400_CLASSNAMES
+    if KINETICS_400_CLASSNAMES is not None:
+        return KINETICS_400_CLASSNAMES
+
+    # Try downloading from HuggingFace
+    urls = [
+        "https://raw.githubusercontent.com/deepmind/kinetics-i3d/master/data/label_map.txt",
+    ]
+    # Fallback: hardcoded sorted class list (standard Kinetics-400)
+    # The label file uses integer class IDs 0-399
+    # We'll parse from the label file or use a known mapping
+
+    # Try to get from the web
+    for url in urls:
+        try:
+            import urllib.request
+            resp = urllib.request.urlopen(url, timeout=10)
+            lines = resp.read().decode('utf-8').strip().split('\n')
+            # label_map.txt format: one class per line, 0-indexed
+            KINETICS_400_CLASSNAMES = {i: line.strip() for i, line in enumerate(lines)}
+            print(f"  Loaded {len(KINETICS_400_CLASSNAMES)} Kinetics-400 class names")
+            return KINETICS_400_CLASSNAMES
+        except Exception as e:
+            print(f"  Warning: could not download class names from {url}: {e}")
+
+    # Last resort: try loading from HuggingFace label-files
+    try:
+        import urllib.request
+        url = "https://huggingface.co/datasets/huggingface/label-files/resolve/main/kinetics400-id2label.json"
+        resp = urllib.request.urlopen(url, timeout=10)
+        id2label = json.loads(resp.read().decode('utf-8'))
+        KINETICS_400_CLASSNAMES = {int(k): v for k, v in id2label.items()}
+        print(f"  Loaded {len(KINETICS_400_CLASSNAMES)} Kinetics-400 class names from HuggingFace")
+        return KINETICS_400_CLASSNAMES
+    except Exception as e:
+        print(f"  Warning: could not download from HuggingFace: {e}")
+
+    raise RuntimeError("Could not load Kinetics-400 class names. Please provide a classnames file.")
+
+
+def _load_kinetics_flat(data_path, label_file, video_dir, val_size=None):
+    """Load Kinetics-400 from flat format: videos_val/*.mp4 + label file.
+
+    Label file format: video_filename.mp4 class_id
+    """
+    from PIL import Image
+    print(f"  Detected flat Kinetics format")
+    print(f"    Label file: {label_file}")
+    print(f"    Video dir: {video_dir}")
+
+    # Load class names
+    id2name = _get_kinetics400_classnames()
+
+    # Parse label file
+    video_labels = {}
+    with open(label_file) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                fname = parts[0]
+                class_id = int(parts[1])
+                video_labels[fname] = class_id
+
+    print(f"  Label file: {len(video_labels)} entries")
+
+    # Find which classes are present
+    present_ids = sorted(set(video_labels.values()))
+    # Build class list: id → index mapping
+    id_to_idx = {cid: i for i, cid in enumerate(present_ids)}
+    classnames = [id2name.get(cid, f"class_{cid}") for cid in present_ids]
+    print(f"  {len(classnames)} classes present")
+
+    # Collect videos that exist on disk
+    all_videos = []
+    missing = 0
+    for fname, class_id in video_labels.items():
+        vpath = video_dir / fname
+        if vpath.exists():
+            all_videos.append((vpath, id_to_idx[class_id]))
+        else:
+            missing += 1
+
+    print(f"  Found {len(all_videos)} videos on disk ({missing} missing)")
+
+    if val_size and val_size < len(all_videos):
+        random.seed(42)
+        all_videos = random.sample(all_videos, val_size)
+        print(f"  Subsampled to {val_size} videos")
+
+    # Extract middle frames
+    print(f"  Extracting middle frames...")
+    images = []
+    labels = []
+    skipped = 0
+    for i, (vpath, label) in enumerate(all_videos):
+        frame = extract_middle_frame(vpath)
+        if frame is not None:
+            images.append(frame)
+            labels.append(label)
+        else:
+            skipped += 1
+        if (i + 1) % 1000 == 0:
+            print(f"    {i+1}/{len(all_videos)} videos processed ({skipped} skipped)")
+
+    print(f"  Extracted {len(images)} frames ({skipped} videos skipped)")
+    return images, labels, classnames
+
+
 def load_video_dataset(data_dir, dataset_name, val_size=None, split="test"):
     """Load video dataset by extracting middle frames.
 
-    Supports two formats:
+    Supports formats:
     1. Video files: data_dir/class_name/video.avi → extract middle frame
     2. Frame folders: data_dir/class_name/video_clip_folder/frame_001.jpg → pick middle frame
+    3. Flat videos + label file: data_dir/videos_val/*.mp4 + data_dir/kinetics400_val_list_videos.txt
     """
     from PIL import Image
     data_path = Path(data_dir)
 
+    # --- Check for flat Kinetics format (label file + video folder) ---
+    label_files = list(data_path.glob("*list_videos*.txt")) + list(data_path.glob("*labels*.txt"))
+    video_dirs = [d for d in data_path.iterdir() if d.is_dir() and "video" in d.name.lower()]
+
+    if label_files and video_dirs:
+        return _load_kinetics_flat(data_path, label_files[0], video_dirs[0], val_size)
+
+    # Also check if data_dir itself has a label file one level up
+    parent_labels = list(data_path.parent.glob("*list_videos*.txt"))
+    if parent_labels and all(f.suffix.lower() in {'.mp4','.avi','.mkv','.webm','.mov'}
+                            for f in list(data_path.iterdir())[:5] if f.is_file()):
+        return _load_kinetics_flat(data_path.parent, parent_labels[0], data_path, val_size)
+
+    # --- Standard class-folder formats ---
     # Find class folders
     class_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
     if len(class_dirs) == 0:
