@@ -122,6 +122,8 @@ def main():
     parser.add_argument("--clip-model", default="ViT-L/14")
     parser.add_argument("--llm", default="gpt-4o")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--data-dir", default=None)
+    parser.add_argument("--val-size", type=int, default=1000)
     parser.add_argument("--output-dir", default="experiments")
     args = parser.parse_args()
 
