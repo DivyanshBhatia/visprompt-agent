@@ -123,12 +123,25 @@ class GeminiVisionClient:
             config=types.GenerateContentConfig(
                 max_output_tokens=50,
                 temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         if response.usage_metadata:
             self.total_input_tokens += response.usage_metadata.prompt_token_count or 0
             self.total_output_tokens += response.usage_metadata.candidates_token_count or 0
-        return response.text.strip()
+        text = response.text
+        if text is None:
+            # Gemini thinking models may have text in later parts
+            try:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        text = part.text
+                        break
+            except (IndexError, AttributeError):
+                pass
+            if text is None:
+                text = ""
+        return text.strip()
 
     def describe(self, image_b64):
         from google.genai import types
@@ -143,12 +156,24 @@ class GeminiVisionClient:
             config=types.GenerateContentConfig(
                 max_output_tokens=100,
                 temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         if response.usage_metadata:
             self.total_input_tokens += response.usage_metadata.prompt_token_count or 0
             self.total_output_tokens += response.usage_metadata.candidates_token_count or 0
-        return response.text.strip()
+        text = response.text
+        if text is None:
+            try:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        text = part.text
+                        break
+            except (IndexError, AttributeError):
+                pass
+            if text is None:
+                text = ""
+        return text.strip()
 
     def get_cost(self):
         # Gemini 2.5 Flash: $0.15/1M input, $0.60/1M output (text+image)
