@@ -116,7 +116,7 @@ class GeminiVisionClient:
             model=self.model,
             contents=[
                 types.Content(role="user", parts=[
-                    types.Part.from_text(f"Which of the following categories best describes the main subject in this image?\n\nCategories: {class_str}\n\nRespond with ONLY the exact category name, nothing else."),
+                    types.Part.from_text(text=f"Which of the following categories best describes the main subject in this image?\n\nCategories: {class_str}\n\nRespond with ONLY the exact category name, nothing else."),
                     self._make_image_part(image_b64),
                 ])
             ],
@@ -136,7 +136,7 @@ class GeminiVisionClient:
             model=self.model,
             contents=[
                 types.Content(role="user", parts=[
-                    types.Part.from_text("What object, animal, texture, or scene is shown in this image? Give a short, specific answer in 1-2 sentences focusing on the main subject."),
+                    types.Part.from_text(text="What object, animal, texture, or scene is shown in this image? Give a short, specific answer in 1-2 sentences focusing on the main subject."),
                     self._make_image_part(image_b64),
                 ])
             ],
