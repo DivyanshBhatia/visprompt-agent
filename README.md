@@ -69,7 +69,7 @@ Tested across **7 backbones** (OpenAI CLIP, EVA-CLIP, MetaCLIP, SigLIP) × **4 L
 ## Installation
 
 ```bash
-git clone https://github.com/DivyanshBhatia/visprompt-agent.git
+git clone https://github.com/DivyanshBhatia/NETRA.git
 cd visprompt-agent
 pip install -e .
 ```
