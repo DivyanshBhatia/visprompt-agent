@@ -19,13 +19,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 logger = logging.getLogger(__name__)
 
-# Map LLM names to providers
+# Map short LLM names to providers and full API model strings
 LLM_PROVIDERS = {
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
     "gpt-5.2": "openai",
     "claude-sonnet-4": "anthropic",
     "claude-opus-4.5": "anthropic",
+}
+
+# Map short names to full API model strings
+LLM_API_NAMES = {
+    "gpt-4o": "gpt-4o",
+    "gpt-4o-mini": "gpt-4o-mini",
+    "gpt-5.2": "gpt-5.2",
+    "claude-sonnet-4": "claude-sonnet-4-20250514",
+    "claude-opus-4.5": "claude-opus-4-5-20250514",
 }
 
 
@@ -77,7 +86,8 @@ def load_or_generate_desc(output_dir, dataset, llm):
 
         from scripts.run_weight_ablation import generate_descriptions
         provider = LLM_PROVIDERS.get(llm, "openai")
-        descriptions, cost = generate_descriptions(task_spec, llm, provider)
+        api_name = LLM_API_NAMES.get(llm, llm)
+        descriptions, cost = generate_descriptions(task_spec, api_name, provider)
         print(f"  Generated {len(descriptions)} classes (cost: {cost})")
 
         cache_path = Path(output_dir) / f"descriptions_{dataset}_{llm}.json"

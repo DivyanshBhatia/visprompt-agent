@@ -93,9 +93,16 @@ def load_descriptions(dataset_name, llm, output_dir, task_spec=None, llm_provide
         print(f"  No cached descriptions and no task_spec to generate")
         return None
 
-    print(f"  Generating descriptions for {dataset_name} with {llm}...")
+    # Map short names to full API model strings
+    API_NAMES = {
+        "claude-sonnet-4": "claude-sonnet-4-20250514",
+        "claude-opus-4.5": "claude-opus-4-5-20250514",
+    }
+    api_model = API_NAMES.get(llm, llm)
+
+    print(f"  Generating descriptions for {dataset_name} with {api_model}...")
     from scripts.run_weight_ablation import generate_descriptions
-    descriptions, cost = generate_descriptions(task_spec, llm, llm_provider)
+    descriptions, cost = generate_descriptions(task_spec, api_model, llm_provider)
     print(f"  Generated {len(descriptions)} classes (cost: {cost})")
 
     # Cache for next time
