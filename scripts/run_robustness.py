@@ -110,14 +110,18 @@ def load_descriptions(dataset_name, llm, output_dir, task_spec=None, llm_provide
 
 @torch.no_grad()
 def evaluate_config(task_runner, task_spec, class_names, descriptions,
-                    templates, alpha, beta, device):
+                    templates, alpha, beta):
     """Evaluate a single alpha/beta config with given templates."""
-    import open_clip
 
-    model = task_runner.model
-    tokenizer = task_runner.tokenizer
+    # Ensure model is loaded
+    task_runner._ensure_model()
+    task_runner.load_data()
+    model = task_runner._clip_model
+    tokenizer = task_runner._tokenizer
 
     M = len(templates)
+
+    # Build prompts per class
     ppc = {}
     for cls in class_names:
         tmpl_prompts = [t.format(cls) for t in templates] if alpha > 0 else []
@@ -138,35 +142,12 @@ def evaluate_config(task_runner, task_spec, class_names, descriptions,
 
         ppc[cls] = {"prompts": prompts, "weights": weights}
 
-    # Encode text
-    class_embs = []
-    for cls in class_names:
-        p = ppc[cls]
-        tokens = tokenizer(p["prompts"]).to(device)
-        emb = model.encode_text(tokens)
-        emb = emb / emb.norm(dim=-1, keepdim=True)
-        w = torch.tensor(p["weights"], dtype=torch.float32, device=device)
-        w = w / w.sum()
-        cls_emb = (emb * w.unsqueeze(1)).sum(dim=0)
-        cls_emb = cls_emb / cls_emb.norm()
-        class_embs.append(cls_emb)
-    class_embs = torch.stack(class_embs)
-
-    # Get image features from task runner
-    if hasattr(task_runner, '_cached_image_features'):
-        image_features = task_runner._cached_image_features
-        labels = task_runner._cached_labels
-    else:
-        # Run through dataset
-        image_features, labels = task_runner.encode_images()
-        task_runner._cached_image_features = image_features
-        task_runner._cached_labels = labels
-
-    sims = image_features.to(device) @ class_embs.T
-    preds = sims.argmax(dim=1).cpu()
-    labels_t = torch.tensor(labels) if not isinstance(labels, torch.Tensor) else labels
-    acc = (preds == labels_t).float().mean().item()
-    return acc
+    # Use the runner's evaluate method for consistency (logit-level + TTA)
+    result = task_runner.evaluate(
+        {"prompts_per_class": ppc},
+        task_spec
+    )
+    return result.primary_metric
 
 
 def run_heldout_experiment(args, all_datasets):
@@ -239,7 +220,7 @@ def run_heldout_experiment(args, all_datasets):
     return results
 
 
-def run_template_sensitivity(args, model, preprocess, tokenizer, device):
+def run_template_sensitivity(args):
     """Experiment 2: Template set sensitivity."""
     print(f"\n{'='*70}")
     print(f"  EXPERIMENT 2: Template Sensitivity")
@@ -275,19 +256,19 @@ def run_template_sensitivity(args, model, preprocess, tokenizer, device):
                 # Templates only
                 acc_tmpl = evaluate_config(
                     task_runner, task_spec, class_names, descriptions,
-                    templates, alpha=1.0, beta=0.0, device=device
+                    templates, alpha=1.0, beta=0.0
                 )
 
                 # CuPL+e (uniform)
                 acc_cupl = evaluate_config(
                     task_runner, task_spec, class_names, descriptions,
-                    templates, alpha=M/(M+10), beta=10/(M+10), device=device
+                    templates, alpha=M/(M+10), beta=10/(M+10)
                 )
 
                 # NETRA 55/45
                 acc_netra = evaluate_config(
                     task_runner, task_spec, class_names, descriptions,
-                    templates, alpha=0.55, beta=0.45, device=device
+                    templates, alpha=0.55, beta=0.45
                 )
 
                 delta_cupl = acc_cupl - acc_tmpl
@@ -349,14 +330,6 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
 
-    import open_clip
-    model_name = args.clip_model.replace('/', '-')
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        model_name, pretrained='openai', device=args.device
-    )
-    model.eval()
-    tokenizer = open_clip.get_tokenizer(model_name)
-
     all_results = {}
 
     # ── Held-out experiment needs per-dataset sweep results ──
@@ -388,7 +361,7 @@ def main():
                 for alpha, beta, label in configs:
                     acc = evaluate_config(
                         task_runner, task_spec, class_names, descriptions,
-                        IMAGENET_TEMPLATES, alpha, beta, args.device
+                        IMAGENET_TEMPLATES, alpha, beta
                     )
                     accs.append(acc)
                     labels.append(label)
@@ -408,7 +381,7 @@ def main():
 
     # ── Template sensitivity ──
     if "templates" in args.experiments:
-        template_results = run_template_sensitivity(args, model, preprocess, tokenizer, args.device)
+        template_results = run_template_sensitivity(args)
         all_results["templates"] = template_results
 
     # Save
