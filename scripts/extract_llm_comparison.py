@@ -24,6 +24,13 @@ def load_desc(output_dir, dataset, llm):
         if p.exists():
             with open(p) as f:
                 return json.load(f)
+    # Search recursively
+    for p in Path(output_dir).rglob(f"*{dataset}*desc*{llm}*.json"):
+        with open(p) as f:
+            return json.load(f)
+    for p in Path(output_dir).rglob(f"*desc*{dataset}*{llm}*.json"):
+        with open(p) as f:
+            return json.load(f)
     return None
 
 

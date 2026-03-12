@@ -404,14 +404,33 @@ def main():
         classnames = task_spec.class_names
         
         # Load descriptions
+        # Load or generate descriptions
         desc_cache = Path(args.output_dir) / f"descriptions_{dataset_name}_{args.llm}.json"
-        if desc_cache.exists():
-            with open(desc_cache) as f:
-                descriptions = json.load(f)
-            print(f"  Loaded cached descriptions")
-        else:
-            descriptions = {c: [f"a photo of a {c}"] for c in classnames}
-            print(f"  WARNING: No cached descriptions, using placeholders")
+        descriptions = None
+        # Try multiple patterns
+        for pat in [f"descriptions_{dataset_name}_{args.llm}.json",
+                    f"desc_{dataset_name}_{args.llm}.json"]:
+            p = Path(args.output_dir) / pat
+            if p.exists():
+                with open(p) as f:
+                    descriptions = json.load(f)
+                print(f"  Loaded cached descriptions from {p.name}")
+                break
+        # Search recursively
+        if descriptions is None:
+            for p in Path(args.output_dir).rglob(f"*{dataset_name}*desc*.json"):
+                with open(p) as f:
+                    descriptions = json.load(f)
+                print(f"  Found descriptions at {p}")
+                break
+        # Generate if still not found
+        if descriptions is None:
+            print(f"  Generating descriptions for {dataset_name}...")
+            from scripts.run_weight_ablation import generate_descriptions
+            descriptions, cost = generate_descriptions(task_spec, args.llm, "openai")
+            with open(desc_cache, 'w') as f:
+                json.dump(descriptions, f, indent=1)
+            print(f"  Generated and cached ({cost})")
         
         dataset_results = {"dataset": dataset_name, "n_classes": len(classnames)}
         

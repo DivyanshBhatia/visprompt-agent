@@ -63,13 +63,49 @@ TWENTY_TEMPLATES = [
 ]
 
 
-def load_descriptions(dataset_name, llm, output_dir):
-    """Load cached descriptions."""
-    cache = Path(output_dir) / f"descriptions_{dataset_name}_{llm}.json"
-    if cache.exists():
-        with open(cache) as f:
+def load_descriptions(dataset_name, llm, output_dir, task_spec=None, llm_provider="openai"):
+    """Load cached descriptions, or generate and cache them if not found."""
+    # Try multiple naming patterns
+    patterns = [
+        f"descriptions_{dataset_name}_{llm}.json",
+        f"desc_{dataset_name}_{llm}.json",
+        f"desc_{dataset_name}_general_{llm}.json",
+    ]
+    for pat in patterns:
+        p = Path(output_dir) / pat
+        if p.exists():
+            with open(p) as f:
+                print(f"  Loaded cached descriptions from {p.name}")
+                return json.load(f)
+
+    # Also search recursively
+    for p in Path(output_dir).rglob(f"*{dataset_name}*desc*.json"):
+        with open(p) as f:
+            print(f"  Found descriptions at {p}")
             return json.load(f)
-    return None
+    for p in Path(output_dir).rglob(f"*desc*{dataset_name}*.json"):
+        with open(p) as f:
+            print(f"  Found descriptions at {p}")
+            return json.load(f)
+
+    # Not found — generate
+    if task_spec is None:
+        print(f"  No cached descriptions and no task_spec to generate")
+        return None
+
+    print(f"  Generating descriptions for {dataset_name} with {llm}...")
+    from scripts.run_weight_ablation import generate_descriptions
+    descriptions, cost = generate_descriptions(task_spec, llm, llm_provider)
+    print(f"  Generated {len(descriptions)} classes (cost: {cost})")
+
+    # Cache for next time
+    cache_path = Path(output_dir) / f"descriptions_{dataset_name}_{llm}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, 'w') as f:
+        json.dump(descriptions, f, indent=1)
+    print(f"  Cached to {cache_path}")
+
+    return descriptions
 
 
 @torch.no_grad()
@@ -213,9 +249,10 @@ def run_template_sensitivity(args, model, preprocess, tokenizer, device):
             task_runner = build_task_runner(args, task_spec)
             class_names = task_spec.class_names
 
-            descriptions = load_descriptions(ds_name, args.llm, args.output_dir)
+            descriptions = load_descriptions(ds_name, args.llm, args.output_dir,
+                                              task_spec=task_spec, llm_provider=args.llm_provider)
             if descriptions is None:
-                print(f"  No cached descriptions, skipping")
+                print(f"  Could not load or generate descriptions, skipping")
                 continue
 
             ds_results = []
@@ -327,9 +364,10 @@ def main():
                 task_spec = build_task_spec(args)
                 task_runner = build_task_runner(args, task_spec)
                 class_names = task_spec.class_names
-                descriptions = load_descriptions(ds_name, args.llm, args.output_dir)
+                descriptions = load_descriptions(ds_name, args.llm, args.output_dir,
+                                                  task_spec=task_spec, llm_provider=args.llm_provider)
                 if descriptions is None:
-                    print(f"  {ds_name}: no descriptions, skipping")
+                    print(f"  {ds_name}: could not load or generate descriptions, skipping")
                     continue
 
                 accs = []
