@@ -191,11 +191,13 @@ def run_heldout_experiment(args, all_datasets):
 
     for split_name, selection, heldout in [("A→B", split_A, split_B), ("B→A", split_B, split_A)]:
         print(f"\n  Split {split_name}: Select on {selection}, validate on {heldout}")
+        print(f"  Available datasets: {list(all_datasets.keys())}")
 
         # Find best config on selection set
         selection_accs = {label: [] for _, _, label in configs}
         for ds in selection:
             if ds not in all_datasets:
+                print(f"    {ds} not in results, skipping")
                 continue
             ds_results = all_datasets[ds]
             for acc, label in zip(ds_results["accs"], ds_results["labels"]):
@@ -207,15 +209,26 @@ def run_heldout_experiment(args, all_datasets):
         heldout_accs = {label: [] for _, _, label in configs}
         for ds in heldout:
             if ds not in all_datasets:
+                print(f"    {ds} not in results, skipping")
                 continue
             ds_results = all_datasets[ds]
             for acc, label in zip(ds_results["accs"], ds_results["labels"]):
                 heldout_accs[label].append(acc)
 
+        # Find best config on selection set
+        best_sel_avg = -1
+        best_sel_label = None
+        for _, _, label in configs:
+            if selection_accs[label]:
+                avg = np.mean(selection_accs[label])
+                if avg > best_sel_avg:
+                    best_sel_avg = avg
+                    best_sel_label = label
+
         for _, _, label in configs:
             sel_avg = np.mean(selection_accs[label]) if selection_accs[label] else 0
             hld_avg = np.mean(heldout_accs[label]) if heldout_accs[label] else 0
-            marker = " ← best on selection" if sel_avg == max(np.mean(selection_accs[l]) for _, _, l in configs if selection_accs[l]) else ""
+            marker = " ← best on selection" if label == best_sel_label else ""
             print(f"  {label:<12} {sel_avg*100:>14.2f}% {hld_avg*100:>14.2f}%{marker}")
 
         results[split_name] = {
