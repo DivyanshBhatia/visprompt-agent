@@ -428,7 +428,7 @@ def main():
             print(f"  Generating descriptions for {dataset_name}...")
             from scripts.run_weight_ablation import generate_descriptions
             api_names = {"claude-sonnet-4": "claude-sonnet-4-20250514",
-                        "claude-opus-4.5": "claude-opus-4-5-20250514"}
+                        "claude-opus-4.5": "claude-opus-4-5-20251101"}
             api_model = api_names.get(args.llm, args.llm)
             provider = "anthropic" if "claude" in args.llm else "openai"
             descriptions, cost = generate_descriptions(task_spec, api_model, provider)

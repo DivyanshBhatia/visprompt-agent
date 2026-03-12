@@ -34,7 +34,7 @@ LLM_API_NAMES = {
     "gpt-4o-mini": "gpt-4o-mini",
     "gpt-5.2": "gpt-5.2",
     "claude-sonnet-4": "claude-sonnet-4-20250514",
-    "claude-opus-4.5": "claude-opus-4-5-20250514",
+    "claude-opus-4.5": "claude-opus-4-5-20251101",
 }
 
 

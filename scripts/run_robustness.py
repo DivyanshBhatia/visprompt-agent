@@ -96,7 +96,7 @@ def load_descriptions(dataset_name, llm, output_dir, task_spec=None, llm_provide
     # Map short names to full API model strings
     API_NAMES = {
         "claude-sonnet-4": "claude-sonnet-4-20250514",
-        "claude-opus-4.5": "claude-opus-4-5-20250514",
+        "claude-opus-4.5": "claude-opus-4-5-20251101",
     }
     api_model = API_NAMES.get(llm, llm)
 
