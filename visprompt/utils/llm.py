@@ -83,16 +83,32 @@ class CostTracker:
 
 
 class LLMClient:
-    """Unified LLM client supporting OpenAI and Anthropic APIs.
+    """Unified LLM client supporting OpenAI, Anthropic, Google, and OpenAI-compatible APIs.
 
-    Handles text, vision (image), and structured JSON output.
+    OpenAI-compatible providers (Together, Groq, Ollama, vLLM) are supported via
+    base_url parameter, enabling open-source models like LLaMA, Mistral, Gemma, etc.
     """
+
+    # Known provider base URLs
+    PROVIDER_URLS = {
+        "together": "https://api.together.xyz/v1",
+        "groq": "https://api.groq.com/openai/v1",
+        "ollama": "http://localhost:11434/v1",
+        "vllm": "http://localhost:8000/v1",
+    }
+
+    # Map provider names to API key env vars
+    PROVIDER_API_KEYS = {
+        "together": "TOGETHER_API_KEY",
+        "groq": "GROQ_API_KEY",
+    }
 
     def __init__(
         self,
         model: str = "gpt-4o",
         provider: str = "openai",
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: int = 4096,
         max_retries: int = 3,
@@ -100,13 +116,14 @@ class LLMClient:
     ):
         self.model = model
         self.provider = provider
+        self.base_url = base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.cost_tracker = cost_tracker or CostTracker()
-        self._client = self._init_client(provider, api_key)
+        self._client = self._init_client(provider, api_key, base_url)
 
-    def _init_client(self, provider: str, api_key: Optional[str]):
+    def _init_client(self, provider: str, api_key: Optional[str], base_url: Optional[str] = None):
         if provider == "openai":
             try:
                 from openai import OpenAI
@@ -127,6 +144,18 @@ class LLMClient:
                 return genai
             except ImportError:
                 raise ImportError("pip install google-generativeai")
+        elif provider in self.PROVIDER_URLS or base_url:
+            # OpenAI-compatible providers (Together, Groq, Ollama, vLLM, etc.)
+            try:
+                import os
+                from openai import OpenAI
+                url = base_url or self.PROVIDER_URLS.get(provider)
+                if not api_key:
+                    env_var = self.PROVIDER_API_KEYS.get(provider, f"{provider.upper()}_API_KEY")
+                    api_key = os.environ.get(env_var, "no-key-needed")
+                return OpenAI(api_key=api_key, base_url=url)
+            except ImportError:
+                raise ImportError("pip install openai")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -154,7 +183,7 @@ class LLMClient:
         for attempt in range(self.max_retries):
             try:
                 t0 = time.time()
-                if self.provider == "openai":
+                if self.provider == "openai" or self.provider in self.PROVIDER_URLS or self.base_url:
                     text, usage = self._call_openai(prompt, system, images, json_mode)
                 elif self.provider == "anthropic":
                     text, usage = self._call_anthropic(prompt, system, images, json_mode)
@@ -225,10 +254,20 @@ class LLMClient:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-        resp = self._client.chat.completions.create(**kwargs)
+        try:
+            resp = self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            if json_mode and "response_format" in str(e):
+                # Some open-source models don't support response_format
+                kwargs.pop("response_format", None)
+                # Add JSON instruction to prompt instead
+                kwargs["messages"][-1]["content"] += "\n\nRespond ONLY with valid JSON."
+                resp = self._client.chat.completions.create(**kwargs)
+            else:
+                raise
         usage = TokenUsage(
-            input_tokens=resp.usage.prompt_tokens,
-            output_tokens=resp.usage.completion_tokens,
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
         )
         return resp.choices[0].message.content, usage
 

@@ -47,6 +47,22 @@ LLM_CONFIGS = [
     {"model": "claude-opus-4-5-20251101", "provider": "anthropic", "label": "Claude-Opus-4.5"},
 ]
 
+# Open-source LLMs via Together AI or Groq (OpenAI-compatible APIs)
+# Set TOGETHER_API_KEY or GROQ_API_KEY to enable
+OPENSOURCE_LLM_CONFIGS = [
+    # Together AI models
+    {"model": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "provider": "together", "label": "LLaMA-3.3-70B"},
+    {"model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "provider": "together", "label": "LLaMA-4-Maverick"},
+    {"model": "mistralai/Mistral-Small-24B-Instruct-2501", "provider": "together", "label": "Mistral-Small-24B"},
+    {"model": "Qwen/Qwen2.5-72B-Instruct-Turbo", "provider": "together", "label": "Qwen2.5-72B"},
+    {"model": "google/gemma-2-27b-it", "provider": "together", "label": "Gemma-2-27B"},
+    # Groq models (faster inference)
+    {"model": "llama-3.3-70b-versatile", "provider": "groq", "label": "LLaMA-3.3-70B-Groq"},
+    {"model": "mistral-saba-24b", "provider": "groq", "label": "Mistral-Saba-24B-Groq"},
+    # Local Ollama (if running)
+    {"model": "llama3.3:70b", "provider": "ollama", "label": "LLaMA-3.3-70B-Local"},
+]
+
 DATASET_CONFIGS = {
     "cifar10": {"val_size": 10000},
     "cifar100": {"val_size": 10000},
@@ -215,7 +231,13 @@ def main():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--output-dir", type=str, default="experiments/cross_ablation")
     parser.add_argument("--llms", nargs="+", default=None,
-                        help="Run only specific LLMs by label (e.g. --llms GPT-5.2 Claude-Opus-4.5)")
+                        help="Run only specific LLMs by label (e.g. --llms GPT-5.2 LLaMA-3.3-70B)")
+    parser.add_argument("--include-opensource", action="store_true",
+                        help="Include open-source LLMs (requires TOGETHER_API_KEY or GROQ_API_KEY)")
+    parser.add_argument("--opensource-only", action="store_true",
+                        help="Run only open-source LLMs")
+    parser.add_argument("--together-key", type=str, help="Together AI API key")
+    parser.add_argument("--groq-key", type=str, help="Groq API key")
     parser.add_argument("--verbose", "-v", action="store_true")
     # Dummy args for build_task_spec compatibility
     parser.add_argument("--config", type=str)
@@ -238,16 +260,44 @@ def main():
         os.environ["OPENAI_API_KEY"] = args.openai_key
     if args.anthropic_key:
         os.environ["ANTHROPIC_API_KEY"] = args.anthropic_key
+    if args.together_key:
+        os.environ["TOGETHER_API_KEY"] = args.together_key
+    if args.groq_key:
+        os.environ["GROQ_API_KEY"] = args.groq_key
+
+    # Build available LLM configs
+    all_configs = LLM_CONFIGS.copy()
+    if args.include_opensource or args.opensource_only:
+        # Filter to providers with API keys set
+        available_opensource = []
+        for cfg in OPENSOURCE_LLM_CONFIGS:
+            prov = cfg["provider"]
+            if prov == "together" and os.environ.get("TOGETHER_API_KEY"):
+                available_opensource.append(cfg)
+            elif prov == "groq" and os.environ.get("GROQ_API_KEY"):
+                available_opensource.append(cfg)
+            elif prov == "ollama":
+                available_opensource.append(cfg)  # No key needed
+        if not available_opensource:
+            print("WARNING: --include-opensource but no API keys set.")
+            print("  Set TOGETHER_API_KEY or GROQ_API_KEY, or use --together-key / --groq-key")
+        else:
+            print(f"Open-source LLMs available: {[c['label'] for c in available_opensource]}")
+        if args.opensource_only:
+            all_configs = available_opensource
+        else:
+            all_configs = LLM_CONFIGS + available_opensource
 
     # Filter LLMs if --llms specified
     if args.llms:
-        llm_configs = [c for c in LLM_CONFIGS if c["label"] in args.llms]
+        llm_configs = [c for c in all_configs if c["label"] in args.llms]
         if not llm_configs:
-            print(f"ERROR: No matching LLMs found. Available: {[c['label'] for c in LLM_CONFIGS]}")
+            all_labels = [c['label'] for c in all_configs]
+            print(f"ERROR: No matching LLMs found. Available: {all_labels}")
             sys.exit(1)
         print(f"Running only LLMs: {[c['label'] for c in llm_configs]}")
     else:
-        llm_configs = LLM_CONFIGS
+        llm_configs = all_configs
 
     from scripts.run import build_task_spec, build_task_runner
     from visprompt.baselines import IMAGENET_TEMPLATES
