@@ -26,6 +26,8 @@ LLM_PROVIDERS = {
     "gpt-5.2": "openai",
     "claude-sonnet-4": "anthropic",
     "claude-opus-4.5": "anthropic",
+    "gemini-2.5-flash": "google",
+    "gemini-2.5-flash-lite": "google",
 }
 
 # Map short names to full API model strings
@@ -35,6 +37,8 @@ LLM_API_NAMES = {
     "gpt-5.2": "gpt-5.2",
     "claude-sonnet-4": "claude-sonnet-4-20250514",
     "claude-opus-4.5": "claude-opus-4-5-20251101",
+    "gemini-2.5-flash": "gemini-2.5-flash",
+    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
 }
 
 

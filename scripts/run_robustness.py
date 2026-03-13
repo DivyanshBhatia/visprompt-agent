@@ -97,12 +97,15 @@ def load_descriptions(dataset_name, llm, output_dir, task_spec=None, llm_provide
     API_NAMES = {
         "claude-sonnet-4": "claude-sonnet-4-20250514",
         "claude-opus-4.5": "claude-opus-4-5-20251101",
+        "gemini-2.5-flash": "gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
     }
     api_model = API_NAMES.get(llm, llm)
+    provider = "google" if "gemini" in llm else llm_provider
 
     print(f"  Generating descriptions for {dataset_name} with {api_model}...")
     from scripts.run_weight_ablation import generate_descriptions
-    descriptions, cost = generate_descriptions(task_spec, api_model, llm_provider)
+    descriptions, cost = generate_descriptions(task_spec, api_model, provider)
     print(f"  Generated {len(descriptions)} classes (cost: {cost})")
 
     # Cache for next time

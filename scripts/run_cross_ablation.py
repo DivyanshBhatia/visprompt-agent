@@ -47,6 +47,12 @@ LLM_CONFIGS = [
     {"model": "claude-opus-4-5-20251101", "provider": "anthropic", "label": "Claude-Opus-4.5"},
 ]
 
+# Google Gemini models (set GOOGLE_API_KEY to enable)
+GEMINI_LLM_CONFIGS = [
+    {"model": "gemini-2.5-flash", "provider": "google", "label": "Gemini-2.5-Flash"},
+    {"model": "gemini-2.5-flash-lite", "provider": "google", "label": "Gemini-2.5-Flash-Lite"},
+]
+
 # Open-source LLMs via Together AI or Groq (OpenAI-compatible APIs)
 # Set TOGETHER_API_KEY or GROQ_API_KEY to enable
 OPENSOURCE_LLM_CONFIGS = [
@@ -234,10 +240,15 @@ def main():
                         help="Run only specific LLMs by label (e.g. --llms GPT-5.2 LLaMA-3.3-70B)")
     parser.add_argument("--include-opensource", action="store_true",
                         help="Include open-source LLMs (requires TOGETHER_API_KEY or GROQ_API_KEY)")
+    parser.add_argument("--include-gemini", action="store_true",
+                        help="Include Gemini models (requires GOOGLE_API_KEY)")
+    parser.add_argument("--gemini-only", action="store_true",
+                        help="Run only Gemini models")
     parser.add_argument("--opensource-only", action="store_true",
                         help="Run only open-source LLMs")
     parser.add_argument("--together-key", type=str, help="Together AI API key")
     parser.add_argument("--groq-key", type=str, help="Groq API key")
+    parser.add_argument("--google-key", type=str, help="Google API key")
     parser.add_argument("--verbose", "-v", action="store_true")
     # Dummy args for build_task_spec compatibility
     parser.add_argument("--config", type=str)
@@ -264,9 +275,25 @@ def main():
         os.environ["TOGETHER_API_KEY"] = args.together_key
     if args.groq_key:
         os.environ["GROQ_API_KEY"] = args.groq_key
+    if args.google_key:
+        os.environ["GOOGLE_API_KEY"] = args.google_key
 
     # Build available LLM configs
     all_configs = LLM_CONFIGS.copy()
+
+    # Gemini models
+    if args.include_gemini or args.gemini_only:
+        if os.environ.get("GOOGLE_API_KEY"):
+            print(f"Gemini LLMs available: {[c['label'] for c in GEMINI_LLM_CONFIGS]}")
+            if args.gemini_only:
+                all_configs = GEMINI_LLM_CONFIGS.copy()
+            else:
+                all_configs = all_configs + GEMINI_LLM_CONFIGS
+        else:
+            print("WARNING: --include-gemini but no GOOGLE_API_KEY set.")
+            print("  Set GOOGLE_API_KEY or use --google-key")
+
+    # Open-source models
     if args.include_opensource or args.opensource_only:
         # Filter to providers with API keys set
         available_opensource = []

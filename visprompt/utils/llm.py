@@ -20,6 +20,8 @@ PRICING = {
     "gpt-4-turbo": {"input": 0.01, "output": 0.03},
     "gemini-2.0-flash": {"input": 0.0001, "output": 0.0004},
     "gemini-2.5-pro": {"input": 0.00125, "output": 0.005},
+    "gemini-2.5-flash": {"input": 0.00015, "output": 0.0006},
+    "gemini-2.5-flash-lite": {"input": 0.000075, "output": 0.0003},
     "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
     "claude-haiku-4-5-20251001": {"input": 0.0008, "output": 0.004},
     "qwen2-vl-72b": {"input": 0.0, "output": 0.0},  # self-hosted
@@ -137,13 +139,21 @@ class LLMClient:
             except ImportError:
                 raise ImportError("pip install anthropic")
         elif provider == "google":
+            # Try new google-genai SDK first (Gemini 2.5+)
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key) if api_key else genai.Client()
+                return client
+            except ImportError:
+                pass
+            # Fallback to old google-generativeai SDK
             try:
                 import google.generativeai as genai
                 if api_key:
                     genai.configure(api_key=api_key)
                 return genai
             except ImportError:
-                raise ImportError("pip install google-generativeai")
+                raise ImportError("pip install google-genai (or google-generativeai)")
         elif provider in self.PROVIDER_URLS or base_url:
             # OpenAI-compatible providers (Together, Groq, Ollama, vLLM, etc.)
             try:
@@ -300,6 +310,72 @@ class LLMClient:
         return text, usage
 
     def _call_google(self, prompt, system, images, json_mode):
+        # Try new google-genai SDK first (for Gemini 2.5+)
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = self._client
+            if not hasattr(client, 'models'):
+                # Old SDK was initialized, re-init with new SDK
+                client = genai.Client()
+
+            parts = []
+            if images:
+                import PIL.Image
+                for img in images:
+                    path = Path(img) if not isinstance(img, Path) else img
+                    if path.exists():
+                        image_bytes = path.read_bytes()
+                        parts.append(types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
+            parts.append(types.Part.from_text(text=prompt))
+
+            config = types.GenerateContentConfig(
+                max_output_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+            if json_mode:
+                try:
+                    config.response_mime_type = "application/json"
+                except Exception:
+                    pass  # Older SDK versions may not support this
+            # Disable thinking for flash models
+            if "flash" in self.model.lower():
+                try:
+                    config.thinking_config = types.ThinkingConfig(thinking_budget=0)
+                except Exception:
+                    pass
+
+            if system:
+                config.system_instruction = system
+
+            resp = client.models.generate_content(
+                model=self.model,
+                contents=[types.Content(role="user", parts=parts)],
+                config=config,
+            )
+            text = resp.text
+            if text is None:
+                # Handle thinking models
+                try:
+                    for part in resp.candidates[0].content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            text = part.text
+                            break
+                except (IndexError, AttributeError):
+                    pass
+                if text is None:
+                    text = ""
+
+            in_tok = resp.usage_metadata.prompt_token_count or 0 if resp.usage_metadata else 0
+            out_tok = resp.usage_metadata.candidates_token_count or 0 if resp.usage_metadata else 0
+            usage = TokenUsage(input_tokens=in_tok, output_tokens=out_tok)
+            return text, usage
+
+        except ImportError:
+            pass
+
+        # Fallback to old google-generativeai SDK
         import PIL.Image
         model = self._client.GenerativeModel(self.model, system_instruction=system or None)
         parts = []
@@ -310,7 +386,6 @@ class LLMClient:
         parts.append(prompt)
 
         resp = model.generate_content(parts)
-        # Google doesn't always expose token counts
         in_tok = getattr(resp.usage_metadata, "prompt_token_count", 0) if hasattr(resp, "usage_metadata") else 0
         out_tok = getattr(resp.usage_metadata, "candidates_token_count", 0) if hasattr(resp, "usage_metadata") else 0
         usage = TokenUsage(input_tokens=in_tok, output_tokens=out_tok)
