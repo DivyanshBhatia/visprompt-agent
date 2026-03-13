@@ -52,6 +52,8 @@ def build_task_spec(args) -> TaskSpec:
         return _build_sun397_spec(args)
     elif args.dataset == "country211":
         return _build_country211_spec(args)
+    elif args.dataset == "cub200":
+        return _build_cub200_spec(args)
     elif args.dataset == "coco":
         return _build_coco_spec(args)
     elif args.dataset == "davis2017":
@@ -222,6 +224,15 @@ def build_task_runner(args, task_spec: TaskSpec):
                 "Country211", args, split="test",
                 dataset_kwargs={"split": "test"},
             )
+            runner = CLIPClassificationRunner(
+                clip_model_name=args.clip_model or "ViT-L/14",
+                device=device,
+                images=images,
+                labels=labels,
+            )
+
+        elif args.dataset == "cub200":
+            images, labels = _load_cub200(args)
             runner = CLIPClassificationRunner(
                 clip_model_name=args.clip_model or "ViT-L/14",
                 device=device,

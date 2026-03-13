@@ -386,6 +386,70 @@ def main():
         heldout_results = run_heldout_experiment(args, dataset_configs)
         all_results["heldout"] = heldout_results
 
+        # ── Leave-One-Out validation (computed from same data) ──
+        print(f"\n{'='*70}")
+        print(f"  LEAVE-ONE-OUT VALIDATION")
+        print(f"{'='*70}")
+        print(f"  For each dataset: select best config on other 9, report held-out acc")
+        print(f"\n  {'Held-out':<18} {'Best on 9':>10} {'55/45 on 9':>12} {'Best cfg':>10} {'Held-out acc':>13} {'55/45 acc':>10}")
+        print(f"  {'-'*75}")
+
+        ds_names = sorted(dataset_configs.keys())
+        loo_results = []
+
+        for held_out in ds_names:
+            # Average accuracy across other 9 at each config
+            train_sets = [d for d in ds_names if d != held_out]
+            config_avgs = {}
+            for cfg_idx, (_, _, label) in enumerate(configs):
+                train_accs = [dataset_configs[d]["accs"][cfg_idx] for d in train_sets
+                             if cfg_idx < len(dataset_configs[d]["accs"])]
+                if train_accs:
+                    config_avgs[label] = np.mean(train_accs)
+
+            if not config_avgs:
+                continue
+
+            # Best config on train sets
+            best_label = max(config_avgs, key=config_avgs.get)
+            best_train_avg = config_avgs[best_label]
+            train_55 = config_avgs.get("55/45", 0)
+
+            # What does that config score on held-out?
+            cfg_labels = dataset_configs[held_out]["labels"]
+            cfg_accs = dataset_configs[held_out]["accs"]
+            best_idx = cfg_labels.index(best_label) if best_label in cfg_labels else -1
+            idx_55 = cfg_labels.index("55/45") if "55/45" in cfg_labels else -1
+
+            held_acc = cfg_accs[best_idx] if best_idx >= 0 else 0
+            held_55 = cfg_accs[idx_55] if idx_55 >= 0 else 0
+
+            print(f"  {held_out:<18} {best_train_avg*100:>9.2f}% {train_55*100:>11.2f}% {best_label:>10} {held_acc*100:>12.2f}% {held_55*100:>9.2f}%")
+
+            loo_results.append({
+                "held_out": held_out,
+                "best_config_on_9": best_label,
+                "best_train_avg": float(best_train_avg),
+                "train_55_avg": float(train_55),
+                "held_out_acc_at_best": float(held_acc),
+                "held_out_acc_at_55": float(held_55),
+                "gap": float(held_acc - held_55),
+            })
+
+        # Summary
+        gaps = [r["gap"] for r in loo_results]
+        best_configs = [r["best_config_on_9"] for r in loo_results]
+        from collections import Counter
+        config_counts = Counter(best_configs)
+
+        print(f"\n  LOO Summary:")
+        print(f"  Best config distribution: {dict(config_counts)}")
+        print(f"  Mean gap (best vs 55/45): {np.mean(gaps)*100:+.2f}%")
+        print(f"  Max gap:                  {np.max(gaps)*100:+.2f}%")
+        print(f"  Datasets where 55/45 = best: {sum(1 for r in loo_results if r['best_config_on_9'] == '55/45')}/{len(loo_results)}")
+
+        all_results["loo"] = loo_results
+
     # ── Template sensitivity ──
     if "templates" in args.experiments:
         template_results = run_template_sensitivity(args)
