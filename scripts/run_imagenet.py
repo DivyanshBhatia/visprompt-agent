@@ -153,8 +153,8 @@ def load_imagenet(data_dir, val_size=None):
     # dataset assigns label 0 to first sorted wnid, 1 to second, etc.
     # We need classnames[i] to correspond to dataset.classes[i] (the i-th sorted wnid)
     
-    # Build wnid → classname mapping
-    wnid_to_name = download_imagenet_wnid_mapping()
+    # Build wnid → classname mapping, trying multiple sources in priority order
+    wnid_to_name = get_imagenet_wnid_mapping(dataset.classes)
     
     if wnid_to_name is not None:
         classnames = []
@@ -162,6 +162,9 @@ def load_imagenet(data_dir, val_size=None):
             name = wnid_to_name.get(wnid, wnid.replace('_', ' '))
             classnames.append(name)
         print(f"  Mapped {len(classnames)} wnids to class names")
+        # Sanity check: print first few
+        for i in range(min(3, len(classnames))):
+            print(f"    {dataset.classes[i]} → {classnames[i]}")
     else:
         # Fallback: use folder names directly
         classnames = [name.replace('_', ' ') for name in dataset.classes]
@@ -176,6 +179,80 @@ def load_imagenet(data_dir, val_size=None):
         indices = np.arange(len(dataset))
     
     return dataset, classnames, indices
+
+
+def get_imagenet_wnid_mapping(wnid_list):
+    """Get wnid → classname mapping, trying multiple sources.
+    
+    Priority:
+    1. open_clip's built-in classnames (canonical CLIP evaluation names)
+    2. Cached mapping from previous download
+    3. Download from keras-vis (wnid → name JSON)
+    4. Download LOC_synset_mapping.txt
+    
+    Args:
+        wnid_list: sorted list of wnids from ImageFolder.classes
+    Returns:
+        dict: {wnid: classname} or None
+    """
+    import urllib.request
+    cache_dir = Path(__file__).parent.parent / "data"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / "imagenet_wnid_to_name.json"
+    
+    # ── Priority 1: open_clip's classnames ──
+    # open_clip ships with the exact classnames used for CLIP zero-shot evaluation
+    try:
+        from open_clip.zero_shot_metadata import IMAGENET_CLASSNAMES
+        # These are indexed 0-999. In ImageNet, class index i corresponds to the i-th
+        # wnid when sorted alphabetically — which is what ImageFolder does.
+        # So wnid_list[i] → IMAGENET_CLASSNAMES[i]
+        if len(IMAGENET_CLASSNAMES) == len(wnid_list):
+            mapping = {wnid: name for wnid, name in zip(wnid_list, IMAGENET_CLASSNAMES)}
+            with open(cache_file, 'w') as f:
+                json.dump(mapping, f, indent=2)
+            print(f"  Using open_clip's canonical CLIP classnames ({len(mapping)} classes)")
+            return mapping
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  open_clip classnames failed: {e}")
+    
+    # ── Priority 1b: open_clip alternate location ──
+    try:
+        import importlib
+        mod = importlib.import_module("open_clip")
+        for attr_path in [
+            "zero_shot_metadata.IMAGENET_CLASSNAMES",
+            "zero_shot_metadata.OPENAI_IMAGENET_CLASSNAMES",
+            "zero_shot_classifier.IMAGENET_CLASSNAMES",
+        ]:
+            parts = attr_path.split(".")
+            obj = mod
+            try:
+                for p in parts:
+                    obj = getattr(obj, p)
+                if isinstance(obj, (list, tuple)) and len(obj) == len(wnid_list):
+                    mapping = {wnid: name for wnid, name in zip(wnid_list, obj)}
+                    with open(cache_file, 'w') as f:
+                        json.dump(mapping, f, indent=2)
+                    print(f"  Using open_clip classnames via {attr_path}")
+                    return mapping
+            except AttributeError:
+                continue
+    except Exception:
+        pass
+    
+    # ── Priority 2: Cached mapping ──
+    if cache_file.exists():
+        with open(cache_file) as f:
+            mapping = json.load(f)
+        if len(mapping) >= len(wnid_list):
+            print(f"  Using cached wnid mapping ({len(mapping)} classes)")
+            return mapping
+    
+    # ── Priority 3: Download from keras-vis ──
+    return download_imagenet_wnid_mapping()
 
 
 def download_imagenet_wnid_mapping():
