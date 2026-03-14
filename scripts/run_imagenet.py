@@ -148,15 +148,24 @@ def load_imagenet(data_dir, val_size=None):
     from torchvision.datasets import ImageFolder
     
     dataset = ImageFolder(data_dir)
-    classnames = download_imagenet_classnames()
-    if classnames is None:
-        classnames = [name.replace('_', ' ') for name in dataset.classes]
     
-    # If folders are numeric, reorder classnames to match lex sort
-    if dataset.classes[0].isdigit():
-        reordered = [classnames[int(f)] for f in dataset.classes]
-        classnames = reordered
-    # If folders are wnids (n01440764), classnames list is already in wnid-sorted order
+    # dataset.classes = sorted list of wnid folder names ['n01440764', 'n01443537', ...]
+    # dataset assigns label 0 to first sorted wnid, 1 to second, etc.
+    # We need classnames[i] to correspond to dataset.classes[i] (the i-th sorted wnid)
+    
+    # Build wnid → classname mapping
+    wnid_to_name = download_imagenet_wnid_mapping()
+    
+    if wnid_to_name is not None:
+        classnames = []
+        for wnid in dataset.classes:
+            name = wnid_to_name.get(wnid, wnid.replace('_', ' '))
+            classnames.append(name)
+        print(f"  Mapped {len(classnames)} wnids to class names")
+    else:
+        # Fallback: use folder names directly
+        classnames = [name.replace('_', ' ') for name in dataset.classes]
+        print(f"  WARNING: Using wnid folder names as class names (mapping unavailable)")
     
     print(f"  Loaded ImageNet val: {len(dataset)} images, {len(classnames)} classes")
     
@@ -167,6 +176,93 @@ def load_imagenet(data_dir, val_size=None):
         indices = np.arange(len(dataset))
     
     return dataset, classnames, indices
+
+
+def download_imagenet_wnid_mapping():
+    """Download wnid → human-readable class name mapping.
+    
+    Returns dict: {'n01440764': 'tench', 'n01443537': 'goldfish', ...}
+    """
+    import urllib.request
+    cache_dir = Path(__file__).parent.parent / "data"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / "imagenet_wnid_to_name.json"
+    
+    if cache_file.exists():
+        with open(cache_file) as f:
+            return json.load(f)
+    
+    # Method 1: LOC_synset_mapping.txt (wnid + name per line)
+    synset_urls = [
+        "https://raw.githubusercontent.com/formigone/tf-imagenet/master/LOC_synset_mapping.txt",
+        "https://raw.githubusercontent.com/raghakot/keras-vis/master/resources/imagenet_class_index.json",
+    ]
+    
+    for url in synset_urls:
+        try:
+            print(f"  Downloading wnid mapping from {url.split('/')[4]}...")
+            response = urllib.request.urlopen(url, timeout=10)
+            text = response.read().decode('utf-8')
+            
+            if url.endswith('.txt'):
+                # Format: "n01440764 tench, Tinca tinca"
+                mapping = {}
+                for line in text.strip().split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(' ', 1)
+                    if len(parts) == 2:
+                        wnid = parts[0].strip()
+                        name = parts[1].split(',')[0].strip()
+                        mapping[wnid] = name
+                if len(mapping) >= 1000:
+                    with open(cache_file, 'w') as f:
+                        json.dump(mapping, f, indent=2)
+                    print(f"  Saved {len(mapping)} wnid→name mappings")
+                    return mapping
+                    
+            elif url.endswith('.json'):
+                # keras-vis format: {"0": ["n01440764", "tench"], "1": ["n01443537", "goldfish"], ...}
+                data = json.loads(text)
+                mapping = {}
+                for idx_str, (wnid, name) in data.items():
+                    mapping[wnid] = name
+                if len(mapping) >= 1000:
+                    with open(cache_file, 'w') as f:
+                        json.dump(mapping, f, indent=2)
+                    print(f"  Saved {len(mapping)} wnid→name mappings")
+                    return mapping
+                    
+        except Exception as e:
+            print(f"  Failed: {e}")
+            continue
+    
+    # Method 2: Build from torchvision ResNet weights metadata
+    try:
+        print("  Trying torchvision ResNet weights metadata...")
+        import torchvision
+        from torchvision.models import ResNet50_Weights
+        weights = ResNet50_Weights.IMAGENET1K_V1
+        categories = weights.meta["categories"]  # 1000 names in class index order
+        
+        # Also need the wnid ordering. The keras-vis JSON above gives us
+        # class_index → (wnid, name). torchvision's class_to_idx gives wnid → label.
+        # We can reconstruct: for a temp ImageFolder, class_to_idx maps sorted wnids to 0-999
+        # But we need wnid for each class index...
+        
+        # Use the canonical ILSVRC2012 wnid list (sorted alphabetically = ImageFolder order)
+        # This is the same ordering torchvision uses internally
+        wnid_url = "https://raw.githubusercontent.com/keras-team/keras-applications/master/keras_applications/imagenet_utils.py"
+        # Too fragile. Just log the issue.
+        print(f"  Got {len(categories)} category names from torchvision but need wnid mapping")
+        print("  Falling back to folder names")
+    except Exception:
+        pass
+    
+    print("  WARNING: Could not download wnid→name mapping.")
+    print("  Try manually: pip install keras-applications, or download LOC_synset_mapping.txt")
+    return None
 
 
 def load_imagenet_huggingface(val_size=None):
