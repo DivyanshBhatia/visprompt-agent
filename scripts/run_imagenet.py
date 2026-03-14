@@ -136,7 +136,15 @@ def download_imagenet_classnames():
 # ══════════════════════════════════════════════════════════════════════
 
 def load_imagenet(data_dir, val_size=None):
-    """Load ImageNet validation set using ImageFolder."""
+    """Load ImageNet validation set.
+    
+    Supports:
+    - data_dir = path to ImageFolder (val/n01440764/...)
+    - data_dir = "huggingface" to load from HuggingFace datasets
+    """
+    if data_dir == "huggingface":
+        return load_imagenet_huggingface(val_size)
+    
     from torchvision.datasets import ImageFolder
     
     dataset = ImageFolder(data_dir)
@@ -158,6 +166,56 @@ def load_imagenet(data_dir, val_size=None):
     else:
         indices = np.arange(len(dataset))
     
+    return dataset, classnames, indices
+
+
+def load_imagenet_huggingface(val_size=None):
+    """Load ImageNet val from HuggingFace (no local download needed).
+    
+    Requires: pip install datasets; huggingface-cli login
+    Must accept ImageNet license at https://huggingface.co/datasets/imagenet-1k
+    """
+    from datasets import load_dataset
+    from PIL import Image as PILImage
+
+    print("  Loading ImageNet val from HuggingFace...")
+    ds = load_dataset("ILSVRC/imagenet-1k", split="validation",
+                       trust_remote_code=True)
+
+    classnames = download_imagenet_classnames()
+    if classnames is None:
+        # Fall back to HF label names
+        classnames = [ds.features["label"].int2str(i).split(",")[0].strip()
+                      for i in range(1000)]
+
+    # Subsample if requested
+    if val_size and val_size < len(ds):
+        indices = np.random.RandomState(42).permutation(len(ds))[:val_size]
+    else:
+        indices = np.arange(len(ds))
+
+    # Wrap as a dataset-like object that ImageFolder-style encoding expects
+    class HFImageNetWrapper:
+        """Wraps HuggingFace dataset to act like torchvision ImageFolder."""
+        def __init__(self, hf_ds):
+            self.ds = hf_ds
+            self.samples = [(i, hf_ds[int(i)]["label"]) for i in range(len(hf_ds))]
+            self.classes = classnames
+
+        def __len__(self):
+            return len(self.ds)
+
+        def __getitem__(self, idx):
+            item = self.ds[int(idx)]
+            img = item["image"]
+            if not isinstance(img, PILImage.Image):
+                img = PILImage.open(img).convert("RGB")
+            else:
+                img = img.convert("RGB")
+            return img, item["label"]
+
+    dataset = HFImageNetWrapper(ds)
+    print(f"  Loaded ImageNet val: {len(ds)} images, {len(classnames)} classes")
     return dataset, classnames, indices
 
 
@@ -574,7 +632,13 @@ def main():
     parser.add_argument("--output-dir", type=str, default="experiments")
     parser.add_argument("--skip-baselines", action="store_true", help="Skip baselines, only run NETRA sweep")
     args = parser.parse_args()
-    
+
+    # Auto-detect provider from model name
+    if "gemini" in args.llm.lower():
+        args.llm_provider = "google"
+    elif "claude" in args.llm.lower():
+        args.llm_provider = "anthropic"
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     
     print(f"\n{'='*70}")
@@ -586,7 +650,11 @@ def main():
     print("Loading dataset...")
     if args.dataset == "imagenet":
         if not args.data_dir:
-            raise ValueError("ImageNet requires --data-dir pointing to val set (ImageFolder format)")
+            raise ValueError(
+                "ImageNet requires --data-dir. Options:\n"
+                "  --data-dir /path/to/imagenet/val   (ImageFolder with wnid subfolders)\n"
+                "  --data-dir huggingface              (stream from HuggingFace, needs `huggingface-cli login`)"
+            )
         dataset, classnames, indices = load_imagenet(args.data_dir, args.val_size)
     elif args.dataset == "imagenet-v2":
         dataset, classnames, indices = load_imagenet_v2(args.data_dir, args.val_size)
