@@ -56,11 +56,13 @@ GEMINI_LLM_CONFIGS = [
 # Open-source LLMs via Together AI or Groq (OpenAI-compatible APIs)
 # Set TOGETHER_API_KEY or GROQ_API_KEY to enable
 OPENSOURCE_LLM_CONFIGS = [
-    # Together AI models
+    # Together AI serverless models (no dedicated endpoint needed)
     {"model": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "provider": "together", "label": "LLaMA-3.3-70B"},
     {"model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", "provider": "together", "label": "LLaMA-4-Maverick"},
     {"model": "mistralai/Mistral-Small-24B-Instruct-2501", "provider": "together", "label": "Mistral-Small-24B"},
-    {"model": "Qwen/Qwen2.5-72B-Instruct-Turbo", "provider": "together", "label": "Qwen2.5-72B"},
+    {"model": "Qwen/Qwen2.5-7B-Instruct-Turbo", "provider": "together", "label": "Qwen2.5-7B"},
+    {"model": "Qwen/Qwen3-235B-A22B-fp8-tput", "provider": "together", "label": "Qwen3-235B"},
+    {"model": "deepseek-ai/DeepSeek-V3", "provider": "together", "label": "DeepSeek-V3"},
     {"model": "google/gemma-2-27b-it", "provider": "together", "label": "Gemma-2-27B"},
     # Groq models (faster inference)
     {"model": "llama-3.3-70b-versatile", "provider": "groq", "label": "LLaMA-3.3-70B-Groq"},
